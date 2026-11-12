@@ -1,8 +1,12 @@
 import express from "express";
 import { Pool } from "pg";
 import { rateLimit } from "express-rate-limit";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const app = express();
+const currentDir = dirname(fileURLToPath(import.meta.url));
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
 app.use(express.json({ limit: "8kb" }));
@@ -117,6 +121,64 @@ app.get("/api/slots", async (req, res, next) => {
 
     res.setHeader("Cache-Control", "no-store");
     res.json({ date, times: available });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Панель мастера — HTML доступен по /admin, но список клиентов скрыт за токеном.
+// ADMIN_TOKEN задаётся только в переменных окружения ONREZA, НЕ в GitHub.
+app.get("/admin", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.sendFile(join(currentDir, "admin.html"));
+});
+
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 12,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Слишком много попыток. Повторите позже." }
+});
+
+function authorized(req) {
+  const secret = process.env.ADMIN_TOKEN;
+  if (!secret || secret.length < 24) return false;
+
+  const header = req.get("Authorization") || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (!token) return false;
+
+  const digest = text => createHash("sha256").update(text, "utf8").digest();
+  return timingSafeEqual(digest(secret), digest(token));
+}
+
+app.get("/api/bookings", adminLimiter, async (req, res, next) => {
+  if (!process.env.ADMIN_TOKEN || process.env.ADMIN_TOKEN.length < 24) {
+    return res.status(503).json({
+      error: "Просмотр записей ещё не настроен: добавьте ADMIN_TOKEN в ONREZA."
+    });
+  }
+
+  if (!authorized(req)) {
+    return res.status(401).json({ error: "Неверный пароль администратора." });
+  }
+
+  try {
+    const result = await pool.query(
+      \`SELECT
+          id,
+          to_char(visit_date, 'YYYY-MM-DD') AS date,
+          to_char(visit_time, 'HH24:MI') AS time,
+          client_name AS name,
+          phone,
+          service
+        FROM bookings
+        ORDER BY visit_date DESC, visit_time DESC
+        LIMIT 100\`
+    );
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ bookings: result.rows });
   } catch (error) {
     next(error);
   }
