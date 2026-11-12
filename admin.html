@@ -39,6 +39,22 @@
     .empty {padding:32px 18px; text-align:center;color:var(--muted);}
     .footer {border-top:1px solid var(--line);padding:18px 0 30px;display:flex;justify-content:space-between;gap:12px;font:11px "DM Mono",monospace;color:var(--muted)}
     @media(max-width:640px) {.intro{padding-top:37px}.brand{font-size:36px}.controls>button{width:100%}.footer{flex-direction:column}}
+    .break-section {border-top:1px solid var(--line);padding:36px 0 46px;}
+    .break-section h2 {font-size:clamp(26px,4vw,44px);font-weight:500;letter-spacing:-.045em;line-height:1.1;margin:10px 0;}
+    .break-section p {font-size:13px;color:var(--muted);line-height:1.7;max-width:670px;}
+    .break-form {display:grid;grid-template-columns:1.3fr 1fr 1fr 2fr auto;align-items:end;gap:12px;margin:23px 0 12px;}
+    .break-form label {min-width:0;}
+    .break-form input {min-width:0;}
+    .break-actions {display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:18px 0;}
+    .ghost {background:transparent;border:1px solid var(--line);color:var(--ink);}
+    .small-button {padding:9px 12px;font-size:12px;}
+    .break-list {display:grid;gap:10px;margin:12px 0 0;padding:0;list-style:none;}
+    .break-list li {display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 18px;border:1px solid var(--line);border-radius:8px;background:#fff;}
+    .break-list time {font:12px "DM Mono",monospace;}
+    .break-list strong {font-size:13px;font-weight:600;}
+    .break-list span {font-size:12px;color:var(--muted);}
+    @media(max-width:900px) {.break-form{grid-template-columns:repeat(2,minmax(0,1fr))}.break-form label:last-of-type{grid-column:1/-1}.break-form button{grid-column:1/-1}}
+    @media(max-width:480px) {.break-form{grid-template-columns:1fr}.break-form label:last-of-type,.break-form button{grid-column:auto}.break-list li{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
 <body>
@@ -77,6 +93,33 @@
       </tbody>
     </table>
   </div>
+  <section class="break-section" aria-labelledby="break-title">
+    <span class="eyebrow">Расписание / Закрытые окна</span>
+    <h2 id="break-title">Перерывы мастера<span style="font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-weight:400">.</span></h2>
+    <p>Закройте отдельный час или целый день. Такие промежутки автоматически исключаются из свободного времени клиентов. Обязательный перерыв 3 часа между приёмами остаётся включён.</p>
+    <form class="break-form" id="break-form">
+      <label for="break-date">Дата
+        <input type="date" id="break-date" required>
+      </label>
+      <label for="break-start">Начало
+        <input type="time" id="break-start" min="12:00" max="19:59" value="15:00" step="60" required>
+      </label>
+      <label for="break-end">Конец
+        <input type="time" id="break-end" min="12:01" max="20:00" value="16:00" step="60" required>
+      </label>
+      <label for="break-note">Причина (необязательно)
+        <input type="text" id="break-note" placeholder="Например, личный перерыв" maxlength="120">
+      </label>
+      <button type="submit" id="save-break">Закрыть время ↗</button>
+    </form>
+    <div class="break-actions">
+      <span id="break-status" role="status" aria-live="polite" style="font-size:13px;color:var(--muted)">Введите ключ администратора выше.</span>
+      <button class="ghost small-button" id="refresh-breaks" type="button">Обновить список</button>
+    </div>
+    <ul class="break-list" id="break-list">
+      <li><span>Список перерывов появится после авторизации.</span></li>
+    </ul>
+  </section>
   <div class="footer"><span>© VERONIKA — PRIVATE DASHBOARD</span><span>Не передавайте ключ посторонним</span></div>
 </main>
 <script>
@@ -87,6 +130,109 @@
   const count = document.getElementById("count");
   const status = document.getElementById("status");
   const fields = ["date", "time", "name", "phone", "service"];
+  const breakForm = document.getElementById("break-form");
+  const breakStatus = document.getElementById("break-status");
+  const breakList = document.getElementById("break-list");
+  const breakDate = document.getElementById("break-date");
+  const breakStart = document.getElementById("break-start");
+  const breakEnd = document.getElementById("break-end");
+  const breakNote = document.getElementById("break-note");
+  const saveBreak = document.getElementById("save-break");
+  const refreshBreaks = document.getElementById("refresh-breaks");
+  function todayInMoscow() {
+    const values = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit"
+    }).formatToParts(new Date());
+    const get = type => values.find(part => part.type === type).value;
+    return get("year") + "-" + get("month") + "-" + get("day");
+  }
+  breakDate.min = todayInMoscow();
+  breakDate.value = breakDate.min;
+
+  const getKey = () => input.value.trim();
+  const noticeBreak = text => { breakStatus.textContent = text; };
+  const request = async (url, options = {}) => {
+    const token = getKey();
+    if (!token) throw new Error("Сначала введите ключ администратора.");
+    const headers = { Authorization: "Bearer " + token };
+    if (options.body) headers["Content-Type"] = "application/json";
+    const response = await fetch(url, { ...options, headers, cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Ошибка API");
+    return data;
+  };
+  async function loadBreaks() {
+    noticeBreak("Загружаем перерывы...");
+    try {
+      const data = await request("/api/breaks");
+      breakList.replaceChildren();
+      const items = Array.isArray(data.breaks) ? data.breaks : [];
+      if (!items.length) {
+        const li = document.createElement("li");
+        li.textContent = "Перерывов пока нет.";
+        breakList.appendChild(li);
+      }
+      for (const item of items) {
+        const li = document.createElement("li");
+        const details = document.createElement("div");
+        const date = document.createElement("time");
+        date.textContent = item.date + " / " + item.start + "–" + item.end;
+        const note = document.createElement("div");
+        note.textContent = item.note || "Время закрыто";
+        note.style.marginTop = "4px";
+        details.append(date, note);
+        const remove = document.createElement("button");
+        remove.className = "ghost small-button";
+        remove.type = "button";
+        remove.textContent = "Открыть время";
+        remove.setAttribute("aria-label", "Удалить перерыв " + date.textContent);
+        remove.addEventListener("click", async () => {
+          remove.disabled = true;
+          try {
+            await request("/api/breaks/" + encodeURIComponent(item.id), { method: "DELETE" });
+            await loadBreaks();
+          } catch (error) {
+            noticeBreak(error.message);
+            remove.disabled = false;
+          }
+        });
+        li.append(details, remove);
+        breakList.appendChild(li);
+      }
+      noticeBreak("Перерывов: " + items.length);
+    } catch (error) {
+      noticeBreak(error.message);
+    }
+  }
+  breakForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (!breakForm.reportValidity()) return;
+    if (breakStart.value >= breakEnd.value) {
+      return noticeBreak("Время начала должно быть раньше конца.");
+    }
+    saveBreak.disabled = true;
+    noticeBreak("Сохраняем перерыв...");
+    try {
+      await request("/api/breaks", {
+        method: "POST",
+        body: JSON.stringify({
+          date: breakDate.value,
+          start: breakStart.value,
+          end: breakEnd.value,
+          note: breakNote.value.trim()
+        })
+      });
+      breakNote.value = "";
+      await loadBreaks();
+      noticeBreak("Перерыв сохранён. Клиенты не смогут выбрать это время.");
+    } catch (error) {
+      noticeBreak(error.message);
+    } finally {
+      saveBreak.disabled = false;
+    }
+  });
+  refreshBreaks.addEventListener("click", loadBreaks);
+
   const setStatus = (text, error = false) => {
     status.textContent = text;
     status.classList.toggle("error", error);
@@ -128,6 +274,7 @@
         rows.appendChild(tr);
       }
       setStatus("Записи успешно загружены.");
+      await loadBreaks();
     } catch (error) {
       rows.replaceChildren();
       count.textContent = "Записи скрыты";
