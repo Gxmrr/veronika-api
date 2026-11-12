@@ -1,11 +1,11 @@
-// После деплоя замените адрес на HTTPS-адрес проекта API в ONREZA.
+// Форма VERONIKA: пользователь вводит любое время с точностью до минуты.
+// Сервер проверяет рабочие часы, длительность услуги и перерыв.
 const API_BASE = "https://veronika-api-lashkovmaximik-g7tm.onreza.app";
-
 const form = document.getElementById("booking-form");
 const dateInput = document.getElementById("date");
-const timeSelect = document.getElementById("time");
+const serviceInput = document.getElementById("service");
 const message = document.getElementById("message");
-const button = form?.querySelector('[type="submit"]');
+const submitButton = form?.querySelector('[type="submit"]');
 
 function dateInMoscow() {
   const parts = new Intl.DateTimeFormat("en-GB", {
@@ -14,53 +14,112 @@ function dateInMoscow() {
     month: "2-digit",
     day: "2-digit"
   }).formatToParts(new Date());
-
   const get = type => parts.find(part => part.type === type)?.value;
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
-function setOptions(label, slots = []) {
-  timeSelect.replaceChildren(new Option(label, ""));
-  for (const slot of slots) timeSelect.add(new Option(slot, slot));
+// Если в HTML осталось <select id="time">, автоматически меняем его
+// на стандартное поле времени. Стили по id="time" при этом сохраняются.
+const previousTime = document.getElementById("time");
+let timeInput = previousTime;
+if (previousTime && previousTime.tagName === "SELECT") {
+  timeInput = document.createElement("input");
+  timeInput.id = "time";
+  timeInput.name = previousTime.name || "time";
+  timeInput.type = "time";
+  timeInput.required = true;
+  timeInput.className = previousTime.className;
+  timeInput.setAttribute("aria-label", "Время записи");
+  previousTime.replaceWith(timeInput);
 }
 
-if (form && dateInput && timeSelect && button && message) {
+if (form && dateInput && serviceInput && timeInput && message && submitButton) {
+  // Услуги и длительность в минутах — должны совпадать с сервером.
+  const durations = {
+    basic: 60,
+    color: 150,
+    repair: 60,
+    extension: 90,
+    nails: 60,
+    "Простой маникюр": 60,
+    "Маникюр в один тон": 150,
+    "Ремонт ногтя": 60,
+    "Донаращивание": 90,
+    "Донаращивание ногтя": 90,
+    "Наращивание": 60,
+    "Наращивание ногтя": 60
+  };
+
+  const getDuration = () => durations[serviceInput.value] || 150;
+  const toClock = minutes => 
+    `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+
   dateInput.min = dateInMoscow();
-  const maxDate = new Date(`${dateInMoscow()}T12:00:00Z`);
-  maxDate.setUTCDate(maxDate.getUTCDate() + 90);
-  dateInput.max = maxDate.toISOString().slice(0, 10);
+  const lastDay = new Date(`${dateInMoscow()}T12:00:00Z`);
+  lastDay.setUTCDate(lastDay.getUTCDate() + 90);
+  dateInput.max = lastDay.toISOString().slice(0, 10);
 
-  button.disabled = false;
-  setOptions("Выберите дату");
+  timeInput.type = "time";
+  timeInput.step = "60"; // 60 секунд = любая минута
+  timeInput.required = true;
+  timeInput.min = "12:00";
+  submitButton.disabled = false;
 
-  async function loadTimes() {
-    setOptions("Загрузка...");
-    if (!dateInput.value) return setOptions("Выберите дату");
+  function updateTimeLimit() {
+    timeInput.max = toClock(20 * 60 - getDuration());
+    if (timeInput.value && !timeInput.checkValidity()) {
+      timeInput.value = "";
+    }
+  }
+  updateTimeLimit();
 
+  let validationRequest = 0;
+  async function checkAvailability() {
+    const version = ++validationRequest;
+    if (!dateInput.value || !serviceInput.value || !timeInput.value) {
+      message.textContent = "Выберите услугу, дату и удобное время.";
+      return;
+    }
+    if (!timeInput.checkValidity()) {
+      message.textContent = "Время должно помещаться в график с 12:00 до 20:00.";
+      return;
+    }
+
+    message.textContent = "Проверяем свободное время...";
     try {
-      const response = await fetch(
-        `${API_BASE}/api/slots?date=${encodeURIComponent(dateInput.value)}`,
-        { cache: "no-store" }
-      );
-      const data = await response.json();
-      if (!response.ok) throw Error(data.error || "Не удалось загрузить время");
-      setOptions(data.times.length ? "Выберите время" : "Свободного времени нет", data.times);
-      message.textContent = "";
+      const params = new URLSearchParams({
+        date: dateInput.value,
+        service: serviceInput.value,
+        time: timeInput.value
+      });
+      const res = await fetch(`${API_BASE}/api/availability?${params}`, {
+        cache: "no-store"
+      });
+      const data = await res.json();
+      if (version !== validationRequest) return;
+      if (!res.ok) throw new Error(data.error || "Ошибка проверки");
+      message.textContent = data.message;
+      message.style.color = data.available ? "" : "#b44d42";
     } catch (error) {
-      setOptions("Не удалось загрузить время");
-      message.textContent = error.message;
+      if (version !== validationRequest) return;
+      message.textContent = "Не удалось проверить время: " + error.message;
     }
   }
 
-  dateInput.addEventListener("change", loadTimes);
+  serviceInput.addEventListener("change", () => {
+    updateTimeLimit();
+    checkAvailability();
+  });
+  dateInput.addEventListener("change", checkAvailability);
+  timeInput.addEventListener("change", checkAvailability);
 
   form.addEventListener("submit", async event => {
     event.preventDefault();
     if (!form.reportValidity()) return;
 
-    button.disabled = true;
+    submitButton.disabled = true;
     message.textContent = "Сохраняем запись...";
-    const selected = { date: dateInput.value, time: timeSelect.value };
+    const selected = { date: dateInput.value, time: timeInput.value };
 
     try {
       const response = await fetch(`${API_BASE}/api/bookings`, {
@@ -69,23 +128,23 @@ if (form && dateInput && timeSelect && button && message) {
         body: JSON.stringify({
           name: document.getElementById("name").value.trim(),
           phone: document.getElementById("phone").value.trim(),
-          service: document.getElementById("service").value,
+          service: serviceInput.value,
           ...selected
         })
       });
-
       const data = await response.json();
-      if (!response.ok) throw Error(data.error || "Не удалось создать запись");
+      if (!response.ok) throw new Error(data.error || "Запись не создана");
 
       form.reset();
-      await loadTimes();
+      validationRequest++;
+      updateTimeLimit();
+      message.style.color = "";
       message.textContent = `Тестовая запись создана: ${selected.date}, ${selected.time}.`;
     } catch (error) {
-      message.textContent = error.message;
-      await loadTimes();
+      message.style.color = "#b44d42";
       message.textContent = error.message;
     } finally {
-      button.disabled = false;
+      submitButton.disabled = false;
     }
   });
 }
