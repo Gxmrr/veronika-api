@@ -166,7 +166,7 @@ app.get("/api/bookings", adminLimiter, async (req, res, next) => {
 
   try {
     const result = await pool.query(
-      \`SELECT
+      `SELECT
           id,
           to_char(visit_date, 'YYYY-MM-DD') AS date,
           to_char(visit_time, 'HH24:MI') AS time,
@@ -175,7 +175,7 @@ app.get("/api/bookings", adminLimiter, async (req, res, next) => {
           service
         FROM bookings
         ORDER BY visit_date DESC, visit_time DESC
-        LIMIT 100\`
+        LIMIT 100`
     );
     res.setHeader("Cache-Control", "no-store");
     res.json({ bookings: result.rows });
