@@ -42,7 +42,63 @@ const pool = new Pool({
   max: 5
 });
 
-const slots = ["12:00", "17:30"];
+// Время можно выбрать с точностью до минуты, пока процедура помещается в график.
+// Продолжительность услуг взята из настроек учебного расписания.
+const OPEN_MINUTES = 12 * 60;
+const CLOSE_MINUTES = 20 * 60;
+const BREAK_MINUTES = 180;
+
+const durations = new Map([
+  ["Простой маникюр", 60],
+  ["Маникюр в один тон", 150],
+  ["Ремонт ногтя", 60],
+  ["Донаращивание ногтя", 90],
+  ["Наращивание ногтя", 60]
+]);
+
+function minuteOfDay(value) {
+  if (typeof value !== "string" || !/^([01]\\d|2[0-3]):[0-5]\\d$/.test(value)) {
+    return NaN;
+  }
+  const [h, m] = value.split(":").map(Number);
+  return h * 60 + m;
+}
+
+function asTime(minutes) {
+  return String(Math.floor(minutes / 60)).padStart(2, "0") + ":" +
+    String(minutes % 60).padStart(2, "0");
+}
+
+function fitsSchedule(time, service) {
+  const start = minuteOfDay(time);
+  const duration = durations.get(service);
+  return Number.isFinite(start) && Number.isFinite(duration) &&
+    start >= OPEN_MINUTES && start + duration <= CLOSE_MINUTES;
+}
+
+function timeIsAvailable(time, service, existing) {
+  if (!fitsSchedule(time, service)) return false;
+  const start = minuteOfDay(time);
+  const end = start + durations.get(service);
+
+  return existing.every(row => {
+    const bookedStart = minuteOfDay(row.time);
+    // Для записей со старыми названиями используем безопасную длительность 2,5 часа.
+    const bookedDuration = durations.get(row.service) || 150;
+    const bookedEnd = bookedStart + bookedDuration;
+    // Запрет пересечений и трёхчасовой интервал между процедурами.
+    return start >= bookedEnd + BREAK_MINUTES ||
+      bookedStart >= end + BREAK_MINUTES;
+  });
+}
+
+async function bookingsForDate(db, date) {
+  const result = await db.query(
+    "SELECT to_char(visit_time, 'HH24:MI') AS time, service FROM bookings WHERE visit_date = $1",
+    [date]
+  );
+  return result.rows;
+}
 
 const services = new Map([
   ["basic", "Простой маникюр"],
@@ -99,28 +155,46 @@ app.get("/api/health", async (_req, res, next) => {
   }
 });
 
-// Список доступных часов
+// Подсказки свободных часов с шагом 15 минут.
+// Это только подсказки: POST принимает любое HH:MM с точностью до минуты.
 app.get("/api/slots", async (req, res, next) => {
   try {
     const date = req.query.date;
-    if (!validDate(date)) {
-      return res.status(400).json({
-        error: "Выберите рабочую дату в ближайшие 90 дней."
-      });
+    const service = services.get(req.query.service || "color");
+    if (!validDate(date) || !service) {
+      return res.status(400).json({ error: "Укажите рабочую дату и услугу." });
     }
-
-    const result = await pool.query(
-      "SELECT to_char(visit_time, 'HH24:MI') AS time FROM bookings WHERE visit_date = $1",
-      [date]
-    );
-
-    const busy = new Set(result.rows.map(row => row.time));
-    const available = slots.filter(time =>
-      !busy.has(time) && futureSlot(date, time)
-    );
-
+    const existing = await bookingsForDate(pool, date);
+    const times = [];
+    for (let minute = OPEN_MINUTES; minute < CLOSE_MINUTES; minute += 15) {
+      const time = asTime(minute);
+      if (futureSlot(date, time) && timeIsAvailable(time, service, existing)) {
+        times.push(time);
+      }
+    }
     res.setHeader("Cache-Control", "no-store");
-    res.json({ date, times: available });
+    res.json({ date, times });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Проверка произвольно выбранного часа и минуты из HTML input[type=time].
+app.get("/api/availability", async (req, res, next) => {
+  try {
+    const { date, time } = req.query;
+    const service = services.get(req.query.service);
+    if (!validDate(date) || !service || !Number.isFinite(minuteOfDay(time))) {
+      return res.status(400).json({ error: "Выберите дату, услугу и время." });
+    }
+    const existing = await bookingsForDate(pool, date);
+    const available = futureSlot(date, time) && timeIsAvailable(time, service, existing);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      date, time, available,
+      message: available ? "Время свободно." :
+        "Этот час занят или процедура не помещается в рабочий день."
+    });
   } catch (error) {
     next(error);
   }
@@ -184,44 +258,61 @@ app.get("/api/bookings", adminLimiter, async (req, res, next) => {
   }
 });
 
-// Новое бронирование; PostgreSQL атомарно запрещает повтор даты+времени
+// Транзакционная запись: блокируем выбранную дату, чтобы два человека
+// одновременно не заняли пересекающееся время.
 app.post("/api/bookings", async (req, res, next) => {
+  let client;
   try {
     const data = req.body || {};
     const name = typeof data.name === "string" ? data.name.trim() : "";
     const phone = typeof data.phone === "string" ? data.phone.trim() : "";
     const service = services.get(data.service);
     const { date, time } = data;
-    const digits = phone.replace(/\D/g, "");
+    const digits = phone.replace(/\\D/g, "");
 
     if (name.length < 2 || name.length > 80 ||
         digits.length < 10 || digits.length > 15 ||
-        !service || !validDate(date) || !slots.includes(time) ||
-        !futureSlot(date, time)) {
+        !service || !validDate(date) ||
+        !futureSlot(date, time) || !fitsSchedule(time, service)) {
       return res.status(400).json({
-        error: "Проверьте имя, телефон, услугу, дату и время."
+        error: "Проверьте имя, телефон, услугу, дату и время работы (12:00–20:00)."
       });
     }
 
-    await pool.query(
-      `INSERT INTO bookings (visit_date, visit_time, client_name, phone, service)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [date, time, name, phone, service]
+    client = await pool.connect();
+    await client.query("BEGIN");
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtext($1::text))",
+      [date]
     );
 
+    const existing = await bookingsForDate(client, date);
+    if (!timeIsAvailable(time, service, existing)) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        error: "Время занято или между записями недостаточно перерыва."
+      });
+    }
+
+    await client.query(
+      "INSERT INTO bookings (visit_date, visit_time, client_name, phone, service) VALUES ($1, $2, $3, $4, $5)",
+      [date, time, name, phone, service]
+    );
+    await client.query("COMMIT");
     res.status(201).json({
       success: true,
-      message: "Тестовая запись сохранена",
+      message: "Запись успешно сохранена.",
       date,
       time
     });
   } catch (error) {
+    if (client) await client.query("ROLLBACK").catch(() => {});
     if (error.code === "23505") {
-      return res.status(409).json({
-        error: "Это время уже занято. Выберите другое."
-      });
+      return res.status(409).json({ error: "Это время уже занято." });
     }
     next(error);
+  } finally {
+    if (client) client.release();
   }
 });
 
