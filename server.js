@@ -57,7 +57,7 @@ const durations = new Map([
 ]);
 
 function minuteOfDay(value) {
-  if (typeof value !== "string" || !/^([01]\\d|2[0-3]):[0-5]\\d$/.test(value)) {
+  if (typeof value !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) {
     return NaN;
   }
   const [h, m] = value.split(":").map(Number);
@@ -268,7 +268,7 @@ app.post("/api/bookings", async (req, res, next) => {
     const phone = typeof data.phone === "string" ? data.phone.trim() : "";
     const service = services.get(data.service);
     const { date, time } = data;
-    const digits = phone.replace(/\\D/g, "");
+    const digits = phone.replace(/\D/g, "");
 
     if (name.length < 2 || name.length > 80 ||
         digits.length < 10 || digits.length > 15 ||
