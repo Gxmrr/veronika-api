@@ -1,5 +1,5 @@
 // После деплоя замените адрес на HTTPS-адрес проекта API в ONREZA.
-const API_BASE = "https://ЗДЕСЬ-ТВОЙ-ПРОЕКТ.onreza.app";
+const API_BASE = "https://veronika-api-lashkovmaximik-g7tm.onreza.app";
 
 const form = document.getElementById("booking-form");
 const dateInput = document.getElementById("date");
