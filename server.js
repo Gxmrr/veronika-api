@@ -16,7 +16,7 @@ const allowedOrigin = process.env.CLIENT_ORIGIN || "*";
 
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   res.setHeader("Vary", "Origin");
 
@@ -76,12 +76,17 @@ function fitsSchedule(time, service) {
     start >= OPEN_MINUTES && start + duration <= CLOSE_MINUTES;
 }
 
-function timeIsAvailable(time, service, existing) {
+function timeIsAvailable(time, service, existing, manualBreaks = []) {
   if (!fitsSchedule(time, service)) return false;
   const start = minuteOfDay(time);
   const end = start + durations.get(service);
+  const clearOfBreaks = manualBreaks.every(item => {
+    const from = minuteOfDay(item.start);
+    const to = minuteOfDay(item.end);
+    return end <= from || start >= to;
+  });
 
-  return existing.every(row => {
+  return clearOfBreaks && existing.every(row => {
     const bookedStart = minuteOfDay(row.time);
     // Для записей со старыми названиями используем безопасную длительность 2,5 часа.
     const bookedDuration = durations.get(row.service) || 150;
@@ -95,6 +100,17 @@ function timeIsAvailable(time, service, existing) {
 async function bookingsForDate(db, date) {
   const result = await db.query(
     "SELECT to_char(visit_time, 'HH24:MI') AS time, service FROM bookings WHERE visit_date = $1",
+    [date]
+  );
+  return result.rows;
+}
+
+// Закрытые мастером промежутки хранятся отдельно от записей.
+async function manualBreaksForDate(db, date) {
+  const result = await db.query(
+    `SELECT id, to_char(start_time, 'HH24:MI') AS start,
+      to_char(end_time, 'HH24:MI') AS "end", note
+      FROM manual_breaks WHERE break_date = $1 ORDER BY start_time`,
     [date]
   );
   return result.rows;
@@ -164,11 +180,13 @@ app.get("/api/slots", async (req, res, next) => {
     if (!validDate(date) || !service) {
       return res.status(400).json({ error: "Укажите рабочую дату и услугу." });
     }
-    const existing = await bookingsForDate(pool, date);
+    const [existing, manualBreaks] = await Promise.all([
+      bookingsForDate(pool, date), manualBreaksForDate(pool, date)
+    ]);
     const times = [];
     for (let minute = OPEN_MINUTES; minute < CLOSE_MINUTES; minute += 15) {
       const time = asTime(minute);
-      if (futureSlot(date, time) && timeIsAvailable(time, service, existing)) {
+      if (futureSlot(date, time) && timeIsAvailable(time, service, existing, manualBreaks)) {
         times.push(time);
       }
     }
@@ -187,8 +205,11 @@ app.get("/api/availability", async (req, res, next) => {
     if (!validDate(date) || !service || !Number.isFinite(minuteOfDay(time))) {
       return res.status(400).json({ error: "Выберите дату, услугу и время." });
     }
-    const existing = await bookingsForDate(pool, date);
-    const available = futureSlot(date, time) && timeIsAvailable(time, service, existing);
+    const [existing, manualBreaks] = await Promise.all([
+      bookingsForDate(pool, date), manualBreaksForDate(pool, date)
+    ]);
+    const available = futureSlot(date, time) &&
+      timeIsAvailable(time, service, existing, manualBreaks);
     res.setHeader("Cache-Control", "no-store");
     res.json({
       date, time, available,
@@ -258,6 +279,104 @@ app.get("/api/bookings", adminLimiter, async (req, res, next) => {
   }
 });
 
+// Приватный список вручную закрытых временных интервалов.
+app.get("/api/breaks", adminLimiter, async (req, res, next) => {
+  if (!authorized(req)) {
+    return res.status(401).json({ error: "Требуется ключ администратора." });
+  }
+  try {
+    const result = await pool.query(
+      `SELECT id, to_char(break_date, 'YYYY-MM-DD') AS date,
+        to_char(start_time, 'HH24:MI') AS start,
+        to_char(end_time, 'HH24:MI') AS "end", note
+        FROM manual_breaks
+        WHERE break_date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Europe/Moscow')::date
+        ORDER BY break_date, start_time LIMIT 200`
+    );
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ breaks: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Закрыть 15:00–16:00 или даже весь день 12:00–20:00.
+app.post("/api/breaks", adminLimiter, async (req, res, next) => {
+  if (!authorized(req)) {
+    return res.status(401).json({ error: "Требуется ключ администратора." });
+  }
+  const { date, start, end } = req.body || {};
+  const note = typeof req.body?.note === "string" ? req.body.note.trim() : "";
+  const startMinutes = minuteOfDay(start);
+  const endMinutes = minuteOfDay(end);
+
+  if (!validDate(date) || !Number.isFinite(startMinutes) ||
+      !Number.isFinite(endMinutes) || startMinutes < OPEN_MINUTES ||
+      endMinutes > CLOSE_MINUTES || endMinutes <= startMinutes ||
+      note.length > 120) {
+    return res.status(400).json({
+      error: "Укажите рабочую дату и перерыв с 12:00 до 20:00 (начало раньше конца)."
+    });
+  }
+
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1::text))", [date]);
+    const existing = await bookingsForDate(client, date);
+    const conflict = existing.some(item => {
+      const bookedStart = minuteOfDay(item.time);
+      const bookedEnd = bookedStart + (durations.get(item.service) || 150);
+      return startMinutes < bookedEnd && endMinutes > bookedStart;
+    });
+    if (conflict) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        error: "На этот период уже есть запись. Выберите другой перерыв."
+      });
+    }
+    const blocks = await manualBreaksForDate(client, date);
+    if (blocks.some(item =>
+      startMinutes < minuteOfDay(item.end) && endMinutes > minuteOfDay(item.start)
+    )) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "Этот период уже закрыт." });
+    }
+    const result = await client.query(
+      `INSERT INTO manual_breaks (break_date, start_time, end_time, note)
+       VALUES ($1, $2, $3, $4) RETURNING id`,
+      [date, start, end, note]
+    );
+    await client.query("COMMIT");
+    res.status(201).json({ success: true, id: result.rows[0].id });
+  } catch (error) {
+    if (client) await client.query("ROLLBACK").catch(() => {});
+    next(error);
+  } finally {
+    client?.release();
+  }
+});
+
+app.delete("/api/breaks/:id", adminLimiter, async (req, res, next) => {
+  if (!authorized(req)) {
+    return res.status(401).json({ error: "Требуется ключ администратора." });
+  }
+  if (!/^[0-9]{1,18}$/.test(req.params.id)) {
+    return res.status(400).json({ error: "Неверный номер перерыва." });
+  }
+  try {
+    const result = await pool.query(
+      "DELETE FROM manual_breaks WHERE id = $1 RETURNING id",
+      [req.params.id]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Перерыв не найден." });
+    res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Транзакционная запись: блокируем выбранную дату, чтобы два человека
 // одновременно не заняли пересекающееся время.
 app.post("/api/bookings", async (req, res, next) => {
@@ -287,10 +406,11 @@ app.post("/api/bookings", async (req, res, next) => {
     );
 
     const existing = await bookingsForDate(client, date);
-    if (!timeIsAvailable(time, service, existing)) {
+    const manualBreaks = await manualBreaksForDate(client, date);
+    if (!timeIsAvailable(time, service, existing, manualBreaks)) {
       await client.query("ROLLBACK");
       return res.status(409).json({
-        error: "Время занято или между записями недостаточно перерыва."
+        error: "Время закрыто мастером, занято или недостаточно трёхчасового перерыва."
       });
     }
 
@@ -336,6 +456,18 @@ async function start() {
       service VARCHAR(80) NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       CONSTRAINT unique_visit_datetime UNIQUE (visit_date, visit_time)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS manual_breaks (
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      break_date DATE NOT NULL,
+      start_time TIME NOT NULL,
+      end_time TIME NOT NULL,
+      note VARCHAR(120) NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT valid_manual_break CHECK (start_time < end_time)
     )
   `);
 
