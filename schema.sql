@@ -10,3 +10,15 @@ CREATE TABLE IF NOT EXISTS bookings (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT unique_visit_datetime UNIQUE (visit_date, visit_time)
 );
+
+
+-- Дополнительные перерывы, которые мастер закрывает вручную в /admin.
+CREATE TABLE IF NOT EXISTS manual_breaks (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  break_date DATE NOT NULL,
+  start_time TIME NOT NULL,
+  end_time TIME NOT NULL,
+  note VARCHAR(120) NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT valid_manual_break CHECK (start_time < end_time)
+);
