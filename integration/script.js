@@ -42,6 +42,111 @@ if (phoneInput) {
 }
 
 if (form && dateInput && timeInput && serviceInput && message && submitButton) {
+
+  // Основная услуга одна, а доп. процедур может быть несколько.
+  serviceInput.replaceChildren(
+    new Option("Выберите основную услугу", ""),
+    new Option("Простой маникюр", "basic"),
+    new Option("Маникюр в один тон", "color"),
+    new Option("Маникюр с дизайном", "design")
+  );
+  const extras = [
+    { key: "repair", label: "Ремонт ногтя", minutes: 60 },
+    { key: "extension", label: "Донаращивание ногтя", minutes: 120 },
+    { key: "nails", label: "Наращивание ногтя", minutes: 120 }
+  ];
+  const counts = { repair: 0, extension: 0, nails: 0 };
+  const baseDurations = { basic: 60, color: 150, design: 180 };
+  const selectedAddons = () => Object.fromEntries(
+    Object.entries(counts).filter(([, quantity]) => quantity > 0)
+  );
+  const totalMinutes = () => (baseDurations[serviceInput.value] || 0) +
+    extras.reduce((sum, item) => sum + item.minutes * counts[item.key], 0);
+
+  const addonSection = document.createElement("section");
+  addonSection.className = "booking-addons";
+  addonSection.setAttribute("aria-label", "Дополнительные услуги");
+  const addonTitle = document.createElement("h3");
+  addonTitle.textContent = "Дополнительные услуги";
+  const addonDescription = document.createElement("p");
+  addonDescription.textContent = "Добавьте нужные услуги и выберите их количество.";
+  const addonList = document.createElement("div");
+  const addonTotal = document.createElement("p");
+  addonTotal.className = "booking-addon-total";
+  addonTotal.setAttribute("aria-live", "polite");
+  addonSection.append(addonTitle, addonDescription, addonList, addonTotal);
+  (serviceInput.closest(".form-field") || serviceInput.parentElement).after(addonSection);
+
+  // Стили встроены, чтобы не пришлось вставлять JS в style.css.
+  if (!document.getElementById("veronika-addon-style")) {
+    const style = document.createElement("style");
+    style.id = "veronika-addon-style";
+    style.textContent = [
+      ".booking-addons{width:100%;margin:18px 0 26px;padding:22px;border:1px solid #dcd8d1;border-radius:10px;background:#faf8f5;color:#252322}",
+      ".booking-addons h3{margin:0 0 6px;font:600 15px Manrope,sans-serif}",
+      ".booking-addons>p{margin:0 0 18px;color:#77726d;font:12px/1.6 Manrope,sans-serif}",
+      ".booking-addon-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:13px 0;border-top:1px solid #e4dfd8}",
+      ".booking-addon-label{font:13px/1.5 Manrope,sans-serif}",
+      ".booking-addon-counter{display:flex;align-items:center;gap:10px;flex-shrink:0}",
+      ".booking-addon-counter button{display:grid;place-items:center;width:34px;height:34px;padding:0;border:1px solid #dcd8d1;border-radius:7px;background:#f2f0eb;color:#252322;font:20px Manrope,sans-serif;cursor:pointer}",
+      ".booking-addon-counter button:disabled{opacity:.35;cursor:not-allowed}",
+      ".booking-addon-counter output{min-width:22px;text-align:center;font:500 13px 'DM Mono',monospace}",
+      ".booking-addons .booking-addon-total{margin:12px 0 0;padding-top:14px;border-top:1px solid #e4dfd8;color:#77726d;font:12px/1.6 Manrope,sans-serif}",
+      "@media(max-width:500px){.booking-addons{padding:16px}.booking-addon-counter{gap:7px}}"
+    ].join("\n");
+    document.head.append(style);
+  }
+
+  const addonControls = {};
+  for (const item of extras) {
+    const row = document.createElement("div");
+    row.className = "booking-addon-row";
+    const label = document.createElement("span");
+    label.className = "booking-addon-label";
+    label.textContent = item.label;
+    const controls = document.createElement("div");
+    controls.className = "booking-addon-counter";
+    const minus = document.createElement("button");
+    minus.type = "button";
+    minus.textContent = "−";
+    minus.setAttribute("aria-label", "Убрать " + item.label);
+    const count = document.createElement("output");
+    count.textContent = "0";
+    const plus = document.createElement("button");
+    plus.type = "button";
+    plus.textContent = "+";
+    plus.setAttribute("aria-label", "Добавить " + item.label);
+    controls.append(minus, count, plus);
+    row.append(label, controls);
+    addonList.append(row);
+    addonControls[item.key] = { minus, count, plus };
+    minus.addEventListener("click", () => {
+      counts[item.key] = Math.max(0, counts[item.key] - 1);
+      updateAddons();
+    });
+    plus.addEventListener("click", () => {
+      if (!serviceInput.value || totalMinutes() + item.minutes > 480) return;
+      counts[item.key]++;
+      updateAddons();
+    });
+  }
+
+  function updateAddons(reload = true) {
+    const total = totalMinutes();
+    for (const item of extras) {
+      const control = addonControls[item.key];
+      control.count.textContent = String(counts[item.key]);
+      control.minus.disabled = counts[item.key] === 0;
+      control.plus.disabled = !serviceInput.value || total + item.minutes > 480;
+    }
+    addonTotal.textContent = serviceInput.value
+      ? "Общее время: " + Math.floor(total / 60) + " ч " +
+        String(total % 60).padStart(2, "0") + " мин. Учтено в расписании."
+      : "Сначала выберите основную услугу.";
+    if (typeof updateTimeHint === "function") updateTimeHint();
+    if (reload && typeof loadAvailableTimes === "function") loadAvailableTimes();
+  }
+
   const today = dateInMoscow();
   const maxDay = new Date(today + "T12:00:00Z");
   maxDay.setUTCDate(maxDay.getUTCDate() + 90);
@@ -92,7 +197,7 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
   timeHelp.className = "booking-time-caption";
   timeHelp.textContent = "СВОБОДНОЕ ВРЕМЯ · ИЛИ ВВЕДИТЕ СВОЁ";
   function updateTimeHint() {
-    const extension = ["extension", "nails", "Донаращивание", "Донаращивание ногтя", "Наращивание", "Наращивание ногтя"].includes(serviceInput.value);
+    const extension = counts.extension > 0 || counts.nails > 0;
     timeHelp.textContent = extension
       ? "СВОБОДНОЕ ВРЕМЯ · ШАГ 2 ЧАСА · ИЛИ ВВЕДИТЕ СВОЁ"
       : "СВОБОДНОЕ ВРЕМЯ · ШАГ 1 ЧАС · ИЛИ ВВЕДИТЕ СВОЁ";
@@ -141,7 +246,8 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
     try {
       const query = new URLSearchParams({
         date: dateInput.value,
-        service: serviceInput.value
+        service: serviceInput.value,
+        addons: JSON.stringify(selectedAddons())
       });
       const response = await fetch(API_BASE + "/api/slots?" + query, {
         cache: "no-store"
@@ -185,7 +291,8 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
         !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return;
     try {
       const params = new URLSearchParams({
-        date: dateInput.value, service: serviceInput.value, time
+        date: dateInput.value, service: serviceInput.value, time,
+        addons: JSON.stringify(selectedAddons())
       });
       const response = await fetch(API_BASE + "/api/availability?" + params, {
         cache: "no-store"
@@ -201,10 +308,7 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
   }
 
   dateInput.addEventListener("change", loadAvailableTimes);
-  serviceInput.addEventListener("change", () => {
-    updateTimeHint();
-    loadAvailableTimes();
-  });
+  serviceInput.addEventListener("change", () => updateAddons());
   timeInput.addEventListener("input", () => {
     // 1230 превращается в 12:30, а 12:30 остаётся 12:30.
     let value = timeInput.value.replace(/[^\d:]/g, "");
@@ -218,7 +322,7 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
   });
   timeInput.addEventListener("change", checkManualTime);
 
-  updateTimeHint();
+  updateAddons(false);
   setEmpty("Выберите дату и услугу, чтобы увидеть свободное время.");
   if (dateInput.value && serviceInput.value) loadAvailableTimes();
 
@@ -238,6 +342,7 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
           name: document.getElementById("name").value.trim(),
           phone: phoneInput.value,
           service: serviceInput.value,
+          addons: selectedAddons(),
           date: chosenDate,
           time: chosenTime
         })
@@ -245,6 +350,8 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Не удалось создать запись");
       form.reset();
+      for (const key of Object.keys(counts)) counts[key] = 0;
+      updateAddons(false);
       ++slotVersion;
       ++validationVersion;
       setEmpty("Выберите дату и услугу, чтобы увидеть свободное время.");
