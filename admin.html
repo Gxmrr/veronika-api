@@ -59,6 +59,15 @@
     .action-button {border-radius:6px;padding:9px 11px;font-size:11px;white-space:nowrap;}
     .danger {background:#fff8f6;color:#a24636;border:1px solid #e9c7be;}
     .danger:hover {background:#fbe9e4;}
+    .contact-section{margin:20px 0 24px;padding:22px;border:1px solid #d6c7b8;border-radius:9px;background:#f9f5ef;display:grid;gap:11px;}
+    .contact-section[hidden]{display:none;}
+    .contact-section h2{font-size:20px;font-weight:600;margin:0;letter-spacing:-.03em;}
+    .contact-section p{margin:0;font-size:13px;line-height:1.6;color:var(--muted);}
+    .contact-section textarea{width:100%;min-height:92px;resize:vertical;padding:12px;border-radius:7px;border:1px solid var(--line);font:13px/1.6 Manrope,sans-serif;}
+    .contact-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+    .contact-actions a{display:inline-block;padding:12px 16px;background:#252322;color:white;border-radius:7px;font:600 12px Manrope,sans-serif;text-decoration:none;}
+    .contact-actions button{padding:12px 16px;}
+    .contact-actions .ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
     .edit-section {padding:30px;background:#fff;border:1px solid var(--line);border-radius:10px;margin:-33px 0 65px;}
     .edit-section[hidden] {display:none;}
     .edit-section h2 {font-size:clamp(24px,3.2vw,38px);font-weight:500;letter-spacing:-.045em;margin:8px 0 12px;}
@@ -91,6 +100,16 @@
     <button id="load" type="button">Показать записи ↗</button>
   </div>
   <div id="status" role="status" aria-live="polite"></div>
+  <section class="contact-section" id="contact-section" hidden aria-live="polite">
+    <h2 id="contact-title">Связаться с клиентом</h2>
+    <p id="contact-description"></p>
+    <textarea id="contact-message" aria-label="Текст сообщения клиенту"></textarea>
+    <div class="contact-actions">
+      <a id="contact-whatsapp" target="_blank" rel="noopener noreferrer">Написать в WhatsApp ↗</a>
+      <button id="contact-copy" type="button" class="ghost">Скопировать текст</button>
+      <button id="contact-dismiss" type="button" class="ghost">Закрыть</button>
+    </div>
+  </section>
   <div id="count" class="count">Записи скрыты до авторизации</div>
   <div class="table-wrap">
     <table>
@@ -164,6 +183,17 @@
   const count = document.getElementById("count");
   const status = document.getElementById("status");
   const fields = ["date", "time", "name", "phone", "service"];
+  const contactSection = document.getElementById("contact-section");
+  const contactTitle = document.getElementById("contact-title");
+  const contactDescription = document.getElementById("contact-description");
+  const contactMessage = document.getElementById("contact-message");
+  const contactWhatsApp = document.getElementById("contact-whatsapp");
+  const contactCopy = document.getElementById("contact-copy");
+  document.getElementById("contact-dismiss").addEventListener("click", () => { contactSection.hidden = true; });
+  contactCopy.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(contactMessage.value); contactCopy.textContent = "Скопировано ✓"; }
+    catch (_error) { contactMessage.select(); contactCopy.textContent = "Выделено — нажмите Cmd+C"; }
+  });
   const editSection = document.getElementById("edit-section");
   const editForm = document.getElementById("edit-form");
   const editDate = document.getElementById("edit-date");
@@ -296,6 +326,43 @@
     return [booking.service, ...extra].join(" + ");
   }
 
+  function openContact(booking, reason = "general", date = booking.date, time = booking.time) {
+    const digits = String(booking.phone || "").replace(/\D/g, "");
+    const phone = digits.length === 11 && digits[0] === "8"
+      ? "7" + digits.slice(1) : digits.length === 10 ? "7" + digits : digits;
+    const appointment = date.split("-").reverse().join(".") + " в " + time;
+    const name = booking.name || "Здравствуйте";
+    const prefix = name + ", здравствуйте! Это мастер VERONIKA. ";
+    const templates = {
+      canceled: "К сожалению, ваша запись на " + appointment +
+        " отменена. Напишите нам, чтобы подобрать другое время.",
+      moved: "Ваша запись перенесена на " + appointment +
+        ". Подтвердите, пожалуйста, что вам удобно.",
+      general: "Пишем по поводу вашей записи на " + appointment + "."
+    };
+    contactTitle.textContent = reason === "canceled"
+      ? "Сообщить об отмене" : reason === "moved"
+        ? "Сообщить о переносе" : "Написать клиенту";
+    contactDescription.textContent = "Клиент: " + booking.name + " · Телефон: " +
+      booking.phone + ". Сообщение отправляется только после вашего подтверждения в мессенджере.";
+    contactMessage.value = prefix + templates[reason];
+    const validPhone = /^7\d{10}$/.test(phone);
+    contactWhatsApp.hidden = !validPhone;
+    if (validPhone) {
+      contactWhatsApp.href = "https://wa.me/" + phone + "?text=" +
+        encodeURIComponent(contactMessage.value);
+    }
+    contactCopy.textContent = "Скопировать текст";
+    contactSection.hidden = false;
+    contactSection.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  contactMessage.addEventListener("input", () => {
+    if (contactWhatsApp.hidden) return;
+    const phone = new URL(contactWhatsApp.href).pathname.slice(1);
+    contactWhatsApp.href = "https://wa.me/" + phone + "?text=" +
+      encodeURIComponent(contactMessage.value);
+  });
+
   function showEdit(booking) {
     selectedBooking = booking;
     editDate.min = todayInMoscow();
@@ -377,12 +444,18 @@
             closeEdit();
             await loadAppointments();
             setStatus("Запись удалена. Время снова доступно, если нет других ограничений.");
+            openContact(booking, "canceled");
           } catch (error) {
             setStatus(error.message, true);
             remove.disabled = false;
           }
         });
-        wrapper.append(move, remove);
+        const contact = document.createElement("button");
+        contact.type = "button";
+        contact.className = "ghost action-button";
+        contact.textContent = "Написать";
+        contact.addEventListener("click", () => openContact(booking));
+        wrapper.append(move, remove, contact);
         actions.appendChild(wrapper);
         tr.appendChild(actions);
         rows.appendChild(tr);
@@ -407,6 +480,7 @@
     editNotice.classList.remove("error");
     editNotice.textContent = "Проверяем расписание и сохраняем перенос...";
     try {
+      const bookingBeforeMove = selectedBooking;
       const updated = await request(
         "/api/bookings/" + encodeURIComponent(selectedBooking.id),
         {
@@ -416,6 +490,7 @@
       );
       await loadAppointments();
       setStatus(updated.message || "Запись перенесена.");
+      openContact(bookingBeforeMove, "moved", editDate.value, editTime.value);
     } catch (error) {
       editNotice.textContent = error.message;
       editNotice.classList.add("error");
