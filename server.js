@@ -773,6 +773,12 @@ async function start() {
       result VARCHAR(24) NOT NULL
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS p1sms_daily_usage (
+      day DATE PRIMARY KEY,
+      attempted INTEGER NOT NULL DEFAULT 0
+    )
+  `);
   await pool.query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS reminder_channel VARCHAR(16) NOT NULL DEFAULT 'none'");
   // Preserve previously linked Telegram users.
   await pool.query("UPDATE bookings SET reminder_channel = 'telegram' WHERE telegram_chat_id IS NOT NULL AND reminder_channel = 'none'");
