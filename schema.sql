@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS bookings (
   client_name VARCHAR(80) NOT NULL,
   phone VARCHAR(20) NOT NULL,
   service VARCHAR(80) NOT NULL,
+  addons JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT unique_visit_datetime UNIQUE (visit_date, visit_time)
 );
@@ -41,3 +42,6 @@ CREATE TABLE IF NOT EXISTS booking_notifications (
   last_error VARCHAR(150),
   UNIQUE (booking_id, kind)
 );
+
+-- Для ранее созданных баз: добавить JSONB без удаления записей.
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS addons JSONB NOT NULL DEFAULT '{}'::jsonb;
