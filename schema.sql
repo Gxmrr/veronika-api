@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS manual_breaks (
 );
 
 
--- Очередь SMS: напоминание за 24 часа и оповещение при переносе.
+-- Очередь уведомлений: за 1 час до записи и при переносе.
 -- Содержит только ссылку на запись, без дублирования телефона клиента.
 CREATE TABLE IF NOT EXISTS booking_notifications (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -51,3 +51,16 @@ ALTER TABLE bookings ADD COLUMN IF NOT EXISTS addons JSONB NOT NULL DEFAULT '{}'
 ALTER TABLE bookings ADD COLUMN IF NOT EXISTS telegram_chat_id BIGINT;
 ALTER TABLE bookings ADD COLUMN IF NOT EXISTS telegram_link_token_hash VARCHAR(64);
 ALTER TABLE bookings ADD COLUMN IF NOT EXISTS reminder_channel VARCHAR(16) NOT NULL DEFAULT 'none';
+
+-- Минимизация трат пробного баланса P1SMS: 1 подтверждённый тест/день.
+CREATE TABLE IF NOT EXISTS p1sms_test_log (
+  day DATE PRIMARY KEY,
+  attempted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  result VARCHAR(24) NOT NULL
+);
+
+-- Ограничитель реальных SMS в день, автоматически учитывает попытки.
+CREATE TABLE IF NOT EXISTS p1sms_daily_usage (
+  day DATE PRIMARY KEY,
+  attempted INTEGER NOT NULL DEFAULT 0
+);
