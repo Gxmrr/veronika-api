@@ -53,8 +53,8 @@ const durations = new Map([
   ["Простой маникюр", 60],
   ["Маникюр в один тон", 150],
   ["Ремонт ногтя", 60],
-  ["Донаращивание ногтя", 90],
-  ["Наращивание ногтя", 60]
+  ["Донаращивание ногтя", 120],
+  ["Наращивание ногтя", 120]
 ]);
 
 function minuteOfDay(value) {
@@ -173,8 +173,8 @@ app.get("/api/health", async (_req, res, next) => {
   }
 });
 
-// Подсказки свободных часов с шагом 15 минут.
-// Это только подсказки: POST принимает любое HH:MM с точностью до минуты.
+// Для наращивания и донаращивания показываем слоты через 2 часа.
+// Для остальных услуг — через 1 час. POST по-прежнему принимает HH:MM до минуты.
 app.get("/api/slots", async (req, res, next) => {
   try {
     const date = req.query.date;
@@ -186,14 +186,16 @@ app.get("/api/slots", async (req, res, next) => {
       bookingsForDate(pool, date), manualBreaksForDate(pool, date)
     ]);
     const times = [];
-    for (let minute = OPEN_MINUTES; minute < CLOSE_MINUTES; minute += 15) {
+    const stepMinutes = (service === "Донаращивание ногтя" ||
+      service === "Наращивание ногтя") ? 120 : 60;
+    for (let minute = OPEN_MINUTES; minute < CLOSE_MINUTES; minute += stepMinutes) {
       const time = asTime(minute);
       if (futureSlot(date, time) && timeIsAvailable(time, service, existing, manualBreaks)) {
         times.push(time);
       }
     }
     res.setHeader("Cache-Control", "no-store");
-    res.json({ date, times });
+    res.json({ date, times, stepMinutes });
   } catch (error) {
     next(error);
   }
