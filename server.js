@@ -1,5 +1,5 @@
 import express from "express";
-import { initNotifications, queueReminder, queueReschedule, smsPhone, processNotifications } from "./notifications.js";
+import { initNotifications, queueReminder, queueReschedule, smsPhone, processNotifications, smstelReady } from "./notifications.js";
 import { Pool } from "pg";
 import { rateLimit } from "express-rate-limit";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -214,6 +214,12 @@ function futureSlot(date, time) {
   return date > now.date || (date === now.date && time > now.time);
 }
 
+// Public methods: do not reveal any API keys.
+app.get("/api/reminder-options", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ telegram: telegramReady(), sms: smstelReady() });
+});
+
 // Проверка связи с базой
 app.get("/api/health", async (_req, res, next) => {
   try {
@@ -363,7 +369,8 @@ app.get("/api/bookings", adminLimiter, async (req, res, next) => {
           client_name AS name,
           phone,
           service,
-          addons
+          addons,
+          reminder_channel
         FROM bookings
         ORDER BY visit_date DESC, visit_time DESC
         LIMIT 100`
@@ -617,6 +624,16 @@ app.post("/api/bookings", async (req, res, next) => {
     const addons = parseAddons(data.addons);
     const { date, time } = data;
     const normalizedPhone = smsPhone(phone);
+    const reminderChannel = data.reminderChannel ?? "none";
+    if (!["none", "telegram", "sms"].includes(reminderChannel)) {
+      return res.status(400).json({ error: "Неизвестный способ напоминания." });
+    }
+    if (reminderChannel === "telegram" && !telegramReady()) {
+      return res.status(503).json({ error: "Telegram-напоминания пока не настроены." });
+    }
+    if (reminderChannel === "sms" && !smstelReady()) {
+      return res.status(503).json({ error: "SMS через SMSTEL пока не подключены." });
+    }
 
     if (name.length < 2 || name.length > 80 ||
         !normalizedPhone ||
@@ -643,12 +660,13 @@ app.post("/api/bookings", async (req, res, next) => {
       });
     }
 
-    const telegramToken = telegramReady() ? randomBytes(24).toString("base64url") : null;
+    const telegramToken = reminderChannel === "telegram" && telegramReady()
+      ? randomBytes(24).toString("base64url") : null;
     const telegramHash = telegramToken
       ? createHash("sha256").update(telegramToken).digest("hex") : null;
     const created = await client.query(
-      "INSERT INTO bookings (visit_date, visit_time, client_name, phone, service, addons, telegram_link_token_hash) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7) RETURNING id",
-      [date, time, name, normalizedPhone, service, JSON.stringify(addons), telegramHash]
+      "INSERT INTO bookings (visit_date, visit_time, client_name, phone, service, addons, telegram_link_token_hash, reminder_channel) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8) RETURNING id",
+      [date, time, name, normalizedPhone, service, JSON.stringify(addons), telegramHash, reminderChannel]
     );
     await queueReminder(client, created.rows[0].id);
     await client.query("COMMIT");
@@ -657,7 +675,8 @@ app.post("/api/bookings", async (req, res, next) => {
       message: "Запись успешно сохранена.",
       date,
       time,
-      telegramLink: telegramToken ? telegramClientLink(telegramToken) : null
+      telegramLink: telegramToken ? telegramClientLink(telegramToken) : null,
+      reminderChannel
     });
   } catch (error) {
     if (client) await client.query("ROLLBACK").catch(() => {});
@@ -709,6 +728,9 @@ async function start() {
   await pool.query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS addons JSONB NOT NULL DEFAULT '{}'::jsonb");
   await pool.query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS telegram_chat_id BIGINT");
   await pool.query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS telegram_link_token_hash VARCHAR(64)");
+  await pool.query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS reminder_channel VARCHAR(16) NOT NULL DEFAULT 'none'");
+  // Preserve previously linked Telegram users.
+  await pool.query("UPDATE bookings SET reminder_channel = 'telegram' WHERE telegram_chat_id IS NOT NULL AND reminder_channel = 'none'");
   await initNotifications(pool);
   // Re-time existing pending reminders to the new one-hour rule.
   await pool.query(`
