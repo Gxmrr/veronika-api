@@ -29,7 +29,7 @@
     #status.error {color:#a24636}
     .count {padding:14px 0; font:12px "DM Mono",monospace; color:var(--muted); border-bottom:1px solid var(--line);}
     .table-wrap {overflow-x:auto; background:#fff; border:1px solid var(--line); border-radius:9px; margin:20px 0 65px;}
-    table {border-collapse:collapse; width:100%; min-width:650px; text-align:left;}
+    table {border-collapse:collapse; width:100%; min-width:850px; text-align:left;}
     th {font:11px "DM Mono",monospace; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); background:#f1efe9; }
     td, th {padding:21px 18px; border-bottom:1px solid var(--line);}
     tr:last-child td {border-bottom:0}
@@ -55,6 +55,21 @@
     .break-list span {font-size:12px;color:var(--muted);}
     @media(max-width:900px) {.break-form{grid-template-columns:repeat(2,minmax(0,1fr))}.break-form label:last-of-type{grid-column:1/-1}.break-form button{grid-column:1/-1}}
     @media(max-width:480px) {.break-form{grid-template-columns:1fr}.break-form label:last-of-type,.break-form button{grid-column:auto}.break-list li{align-items:flex-start;flex-direction:column}}
+    .entry-actions {display:flex;flex-wrap:wrap;align-items:center;gap:7px;}
+    .action-button {border-radius:6px;padding:9px 11px;font-size:11px;white-space:nowrap;}
+    .danger {background:#fff8f6;color:#a24636;border:1px solid #e9c7be;}
+    .danger:hover {background:#fbe9e4;}
+    .edit-section {padding:30px;background:#fff;border:1px solid var(--line);border-radius:10px;margin:-33px 0 65px;}
+    .edit-section[hidden] {display:none;}
+    .edit-section h2 {font-size:clamp(24px,3.2vw,38px);font-weight:500;letter-spacing:-.045em;margin:8px 0 12px;}
+    .edit-desc {color:var(--muted);font-size:13px;line-height:1.7;margin:0 0 22px;}
+    .edit-fields {display:grid;grid-template-columns:1fr 1fr auto auto;gap:12px;align-items:end;}
+    .edit-fields label {min-width:0;}
+    .edit-fields input {min-width:0;}
+    .edit-notice {font-size:13px;line-height:1.6;color:var(--muted);min-height:20px;}
+    .edit-notice.error {color:#a24636;}
+    @media(max-width:750px){.edit-fields{grid-template-columns:1fr 1fr}.edit-fields button{width:100%}}
+    @media(max-width:480px){.edit-fields{grid-template-columns:1fr}.edit-section{padding:20px}}
   </style>
 </head>
 <body>
@@ -86,13 +101,32 @@
           <th>Имя клиента</th>
           <th>Номер телефона</th>
           <th>Услуга</th>
+          <th>Действия</th>
         </tr>
       </thead>
       <tbody id="rows">
-        <tr><td colspan="5" class="empty">Введите ключ администратора, чтобы открыть записи.</td></tr>
+        <tr><td colspan="6" class="empty">Введите ключ администратора, чтобы открыть записи.</td></tr>
       </tbody>
     </table>
   </div>
+  <section class="edit-section" id="edit-section" aria-labelledby="edit-title" hidden>
+    <span class="eyebrow">Журнал / Перенос записи</span>
+    <h2 id="edit-title">Изменить время<span style="font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-weight:400">.</span></h2>
+    <p class="edit-desc" id="edit-description">Поменяйте дату или время. API проверит занятость и рабочее расписание.</p>
+    <form id="edit-form">
+      <div class="edit-fields">
+        <label for="edit-date">Новая дата
+          <input type="date" id="edit-date" required>
+        </label>
+        <label for="edit-time">Новое время
+          <input type="time" id="edit-time" min="12:00" max="19:59" step="60" required>
+        </label>
+        <button type="submit" id="edit-save">Сохранить ↗</button>
+        <button type="button" class="ghost" id="edit-cancel">Отмена</button>
+      </div>
+    </form>
+    <p class="edit-notice" id="edit-notice" role="status" aria-live="polite"></p>
+  </section>
   <section class="break-section" aria-labelledby="break-title">
     <span class="eyebrow">Расписание / Закрытые окна</span>
     <h2 id="break-title">Перерывы мастера<span style="font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-weight:400">.</span></h2>
@@ -130,6 +164,15 @@
   const count = document.getElementById("count");
   const status = document.getElementById("status");
   const fields = ["date", "time", "name", "phone", "service"];
+  const editSection = document.getElementById("edit-section");
+  const editForm = document.getElementById("edit-form");
+  const editDate = document.getElementById("edit-date");
+  const editTime = document.getElementById("edit-time");
+  const editSave = document.getElementById("edit-save");
+  const editCancel = document.getElementById("edit-cancel");
+  const editDescription = document.getElementById("edit-description");
+  const editNotice = document.getElementById("edit-notice");
+  let selectedBooking = null;
   const breakForm = document.getElementById("break-form");
   const breakStatus = document.getElementById("break-status");
   const breakList = document.getElementById("break-list");
@@ -238,25 +281,43 @@
     status.classList.toggle("error", error);
   };
 
-  button.addEventListener("click", async () => {
-    const token = input.value.trim();
+  function showEdit(booking) {
+    selectedBooking = booking;
+    editDate.min = todayInMoscow();
+    editDate.value = booking.date;
+    editTime.value = booking.time;
+    editDescription.textContent =
+      "Перенос записи №" + booking.id + ": " + booking.name +
+      ". Услуга: " + booking.service + ".";
+    editNotice.textContent = "Новая дата и время должны быть свободны. Перерыв 3 часа сохраняется.";
+    editNotice.classList.remove("error");
+    editSection.hidden = false;
+    editDate.focus();
+    editSection.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  function closeEdit() {
+    selectedBooking = null;
+    editSection.hidden = true;
+    editForm.reset();
+    editNotice.textContent = "";
+  }
+  editCancel.addEventListener("click", closeEdit);
+
+  async function loadAppointments() {
+    const token = getKey();
     if (!token) return setStatus("Введите ключ администратора.", true);
     button.disabled = true;
     setStatus("Загружаем записи...");
     try {
-      const response = await fetch("/api/bookings", {
-        headers: { Authorization: "Bearer " + token },
-        cache: "no-store"
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Не удалось загрузить записи");
+      const data = await request("/api/bookings");
       rows.replaceChildren();
       const bookings = Array.isArray(data.bookings) ? data.bookings : [];
       count.textContent = "Всего записей: " + bookings.length;
       if (!bookings.length) {
         const tr = document.createElement("tr");
         const td = document.createElement("td");
-        td.colSpan = 5;
+        td.colSpan = 6;
         td.className = "empty";
         td.textContent = "Пока нет записей.";
         tr.appendChild(td);
@@ -271,18 +332,84 @@
           if (field === "phone") td.className = "phone";
           tr.appendChild(td);
         }
+        const actions = document.createElement("td");
+        const wrapper = document.createElement("div");
+        wrapper.className = "entry-actions";
+
+        const move = document.createElement("button");
+        move.type = "button";
+        move.className = "ghost action-button";
+        move.textContent = "Перенести";
+        move.setAttribute("aria-label", "Перенести запись " + booking.id);
+        move.addEventListener("click", () => showEdit(booking));
+
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "action-button danger";
+        remove.textContent = "Удалить";
+        remove.setAttribute("aria-label", "Удалить запись " + booking.id);
+        remove.addEventListener("click", async () => {
+          const confirmed = confirm(
+            "Удалить запись клиента " + booking.name + " на " +
+            booking.date + " в " + booking.time + "?\\nОтменить действие будет нельзя."
+          );
+          if (!confirmed) return;
+          remove.disabled = true;
+          try {
+            await request("/api/bookings/" + encodeURIComponent(booking.id), {
+              method: "DELETE"
+            });
+            closeEdit();
+            await loadAppointments();
+            setStatus("Запись удалена. Время снова доступно, если нет других ограничений.");
+          } catch (error) {
+            setStatus(error.message, true);
+            remove.disabled = false;
+          }
+        });
+        wrapper.append(move, remove);
+        actions.appendChild(wrapper);
+        tr.appendChild(actions);
         rows.appendChild(tr);
       }
+      closeEdit();
       setStatus("Записи успешно загружены.");
       await loadBreaks();
     } catch (error) {
+      closeEdit();
       rows.replaceChildren();
       count.textContent = "Записи скрыты";
       setStatus(error.message, true);
     } finally {
       button.disabled = false;
     }
+  }
+
+  editForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (!selectedBooking || !editForm.reportValidity()) return;
+    editSave.disabled = true;
+    editNotice.classList.remove("error");
+    editNotice.textContent = "Проверяем расписание и сохраняем перенос...";
+    try {
+      const updated = await request(
+        "/api/bookings/" + encodeURIComponent(selectedBooking.id),
+        {
+          method: "PATCH",
+          body: JSON.stringify({ date: editDate.value, time: editTime.value })
+        }
+      );
+      await loadAppointments();
+      setStatus(updated.message || "Запись перенесена.");
+    } catch (error) {
+      editNotice.textContent = error.message;
+      editNotice.classList.add("error");
+    } finally {
+      editSave.disabled = false;
+    }
   });
+
+  button.addEventListener("click", loadAppointments);
   input.addEventListener("keydown", event => {
     if (event.key === "Enter") button.click();
   });
