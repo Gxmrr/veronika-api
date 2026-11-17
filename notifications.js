@@ -1,11 +1,6 @@
 // VERONIKA notification outbox. Respect the client-selected channel.
 import { telegramSend, telegramReady } from "./telegram.js";
-// SMS sending through SMSTEL will be enabled only after its official API
-// request/response specification is available; do not invent an endpoint.
-export function smstelReady() { return false; }
-async function sendSmstel(_phone, _message) {
-  throw new Error("SMSTEL gateway not configured");
-}
+import { p1smsReady, sendP1sms } from "./p1sms.js";
 
 export function smsPhone(input) {
   let digits = String(input || "").replace(/\D/g, "");
@@ -78,7 +73,7 @@ function formatDate(iso) {
 // Trigger via a protected POST every minute (e.g. cron-job.org).
 // SKIP LOCKED prevents simultaneous invocations from claiming the same job.
 export async function processNotifications(pool, maxCount = 15) {
-  if (!smstelReady() && !telegramReady()) return { configured: false, sent: 0, failed: 0 };
+  if (!p1smsReady() && !telegramReady()) return { configured: false, sent: 0, failed: 0 };
   let sent = 0;
   let failed = 0;
 
@@ -111,7 +106,7 @@ export async function processNotifications(pool, maxCount = 15) {
               locked_until = NOW() + INTERVAL '2 minutes'
         FROM picked WHERE n.id = picked.id
         RETURNING n.id, n.booking_id, n.kind, n.revision
-      `, [telegramReady(), smstelReady()]);
+      `, [telegramReady(), p1smsReady()]);
       job = claim.rows[0];
       await db.query("COMMIT");
     } catch (error) {
@@ -122,6 +117,7 @@ export async function processNotifications(pool, maxCount = 15) {
     }
     if (!job) break;
 
+    let attemptedChannel = null;
     try {
       const result = await pool.query(`
         SELECT phone, telegram_chat_id, reminder_channel,
@@ -133,16 +129,17 @@ export async function processNotifications(pool, maxCount = 15) {
       `, [job.booking_id]);
       if (!result.rowCount) continue;
       const b = result.rows[0];
+      attemptedChannel = b.reminder_channel;
       const when = formatDate(b.date) + " в " + b.time;
       const message = job.kind === "reminder"
         ? "VERONIKA: напоминаем, запись через час (" + when + ")."
         : "VERONIKA: ваша запись перенесена на " + when + ".";
       if (b.reminder_channel === "telegram" && telegramReady() && b.telegram_chat_id) {
         await telegramSend(String(b.telegram_chat_id), message);
-      } else if (b.reminder_channel === "sms" && smstelReady()) {
+      } else if (b.reminder_channel === "sms" && p1smsReady()) {
         const phone = smsPhone(b.phone);
         if (!phone) throw new Error("Invalid mobile number");
-        await sendSmstel(phone, message);
+        await sendP1sms(phone, message);
       } else {
         throw new Error("Selected notification channel is not ready");
       }
@@ -155,15 +152,19 @@ export async function processNotifications(pool, maxCount = 15) {
       sent++;
     } catch (error) {
       failed++;
-      // Do not log phone numbers or API keys.
+      // SMS can cost money. Do not retry automatically after uncertain
+      // provider responses/timeouts: it might otherwise send (and bill) twice.
+      // Telegram retries remain enabled.
       await pool.query(`
         UPDATE booking_notifications
-        SET status = CASE WHEN attempts >= 5 THEN 'failed' ELSE 'pending' END,
+        SET status = CASE WHEN $4::boolean OR attempts >= 5
+              THEN 'failed' ELSE 'pending' END,
             next_attempt_at = NOW() + INTERVAL '5 minutes',
             locked_until = NULL, last_error = $3
         WHERE id = $1 AND revision = $2 AND status = 'sending'
-      `, [job.id, job.revision, String(error.message || "SMS failed").slice(0, 150)]);
+      `, [job.id, job.revision, String(error.message || "Delivery failed").slice(0, 150),
+        attemptedChannel === "sms"]);
     }
   }
-  return { configured: true, sent, failed, telegramConfigured: telegramReady(), smsConfigured: smstelReady() };
+  return { configured: true, sent, failed, telegramConfigured: telegramReady(), smsConfigured: p1smsReady() };
 }
