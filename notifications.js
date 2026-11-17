@@ -111,7 +111,10 @@ export async function processNotifications(pool, maxCount = 15) {
             AND n.attempts < 5
             AND (
               (n.status = 'pending' AND n.next_attempt_at <= NOW())
-              OR (n.status = 'sending' AND n.locked_until < NOW())
+              -- SMS jobs must never be claimed again after an uncertain
+              -- send: the provider may have accepted the first attempt.
+              OR (n.status = 'sending' AND n.locked_until < NOW()
+                AND b.reminder_channel = 'telegram')
             )
           ORDER BY n.scheduled_at, n.id
           FOR UPDATE OF n SKIP LOCKED
