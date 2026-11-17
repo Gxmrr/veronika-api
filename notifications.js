@@ -1,4 +1,5 @@
-// Transactional notification outbox for bookings (PostgreSQL + SMS.ru).
+// Transactional notification outbox for bookings (Telegram opt-in or SMS.ru).
+import { telegramSend, telegramReady } from "./telegram.js";
 // Secrets must only live in ONREZA environment variables, never in GitHub.
 const API_KEY = process.env.SMS_RU_API_ID || "";
 
@@ -35,14 +36,14 @@ export async function queueReminder(db, bookingId) {
     "DELETE FROM booking_notifications WHERE booking_id = $1 AND kind = 'reminder'",
     [bookingId]
   );
-  // A true day-before SMS is only possible if the booking is >24h away.
+  // Schedule one hour before a visit; late bookings cannot get this reminder.
   await db.query(`
     INSERT INTO booking_notifications (booking_id, kind, scheduled_at, next_attempt_at)
     SELECT id, 'reminder', due_at, due_at
     FROM (
       SELECT id,
         ((visit_date + visit_time) AT TIME ZONE 'Europe/Moscow')
-          - INTERVAL '24 hours' AS due_at
+          - INTERVAL '1 hour' AS due_at
       FROM bookings WHERE id = $1
     ) AS candidate
     WHERE due_at > NOW()
@@ -92,7 +93,7 @@ function formatDate(iso) {
 // Trigger via a protected POST every minute (e.g. cron-job.org).
 // SKIP LOCKED prevents simultaneous invocations from claiming the same job.
 export async function processNotifications(pool, maxCount = 15) {
-  if (!API_KEY) return { configured: false, sent: 0, failed: 0 };
+  if (!API_KEY && !telegramReady()) return { configured: false, sent: 0, failed: 0 };
   let sent = 0;
   let failed = 0;
 
@@ -107,6 +108,7 @@ export async function processNotifications(pool, maxCount = 15) {
           FROM booking_notifications n
           JOIN bookings b ON b.id = n.booking_id
           WHERE n.scheduled_at <= NOW()
+            AND ( ($1::boolean AND b.telegram_chat_id IS NOT NULL) OR $2::boolean )
             AND ((b.visit_date + b.visit_time)
               AT TIME ZONE 'Europe/Moscow') > NOW()
             AND n.attempts < 5
@@ -123,7 +125,7 @@ export async function processNotifications(pool, maxCount = 15) {
               locked_until = NOW() + INTERVAL '2 minutes'
         FROM picked WHERE n.id = picked.id
         RETURNING n.id, n.booking_id, n.kind, n.revision
-      `);
+      `, [telegramReady(), Boolean(API_KEY)]);
       job = claim.rows[0];
       await db.query("COMMIT");
     } catch (error) {
@@ -136,7 +138,7 @@ export async function processNotifications(pool, maxCount = 15) {
 
     try {
       const result = await pool.query(`
-        SELECT phone,
+        SELECT phone, telegram_chat_id,
           to_char(visit_date, 'YYYY-MM-DD') AS date,
           to_char(visit_time, 'HH24:MI') AS time
         FROM bookings WHERE id = $1
@@ -145,13 +147,21 @@ export async function processNotifications(pool, maxCount = 15) {
       `, [job.booking_id]);
       if (!result.rowCount) continue;
       const b = result.rows[0];
-      const phone = smsPhone(b.phone);
-      if (!phone) throw new Error("Invalid Russian mobile number");
       const when = formatDate(b.date) + " в " + b.time;
       const message = job.kind === "reminder"
-        ? "VERONIKA: напоминаем, у вас запись завтра " + when + "."
+        ? "VERONIKA: напоминаем, запись через час (" + when + ")."
         : "VERONIKA: ваша запись перенесена на " + when + ".";
-      await sendSms(phone, message);
+      if (telegramReady() && b.telegram_chat_id) {
+        // Free and explicitly opted-in: send only to the linked Telegram chat.
+        await telegramSend(String(b.telegram_chat_id), message);
+      } else if (API_KEY) {
+        // Paid SMS fallback only if the operator configured SMS.ru.
+        const phone = smsPhone(b.phone);
+        if (!phone) throw new Error("Invalid Russian mobile number");
+        await sendSms(phone, message);
+      } else {
+        throw new Error("No available opt-in notification channel");
+      }
       await pool.query(`
         UPDATE booking_notifications
         SET status = 'sent', sent_at = NOW(), locked_until = NULL,
