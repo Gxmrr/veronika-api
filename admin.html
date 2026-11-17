@@ -130,7 +130,7 @@
   <section class="break-section" aria-labelledby="break-title">
     <span class="eyebrow">Расписание / Закрытые окна</span>
     <h2 id="break-title">Перерывы мастера<span style="font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-weight:400">.</span></h2>
-    <p>Закройте отдельный час или целый день. Такие промежутки автоматически исключаются из свободного времени клиентов. Обязательный перерыв 3 часа между приёмами остаётся включён.</p>
+    <p>Закройте отдельный час или целый день. Такие промежутки автоматически исключаются из свободного времени клиентов. Между приёмами автоматически учитываются 15 минут на подготовку рабочего места.</p>
     <form class="break-form" id="break-form">
       <label for="break-date">Дата
         <input type="date" id="break-date" required>
@@ -304,7 +304,7 @@
     editDescription.textContent =
       "Перенос записи №" + booking.id + ": " + booking.name +
       ". Услуги: " + formatServices(booking) + ".";
-    editNotice.textContent = "Новая дата и время должны быть свободны. Перерыв 3 часа сохраняется.";
+    editNotice.textContent = "Новая дата и время должны быть свободны. Между записями сохраняется 15-минутный интервал.";
     editNotice.classList.remove("error");
     editSection.hidden = false;
     editDate.focus();
