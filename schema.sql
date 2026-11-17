@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS bookings (
   phone VARCHAR(20) NOT NULL,
   service VARCHAR(80) NOT NULL,
   addons JSONB NOT NULL DEFAULT '{}'::jsonb,
+  telegram_chat_id BIGINT,
+  telegram_link_token_hash VARCHAR(64),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT unique_visit_datetime UNIQUE (visit_date, visit_time)
 );
@@ -45,3 +47,5 @@ CREATE TABLE IF NOT EXISTS booking_notifications (
 
 -- Для ранее созданных баз: добавить JSONB без удаления записей.
 ALTER TABLE bookings ADD COLUMN IF NOT EXISTS addons JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS telegram_chat_id BIGINT;
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS telegram_link_token_hash VARCHAR(64);
