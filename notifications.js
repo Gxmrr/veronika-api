@@ -65,6 +65,22 @@ export async function queueReschedule(db, bookingId) {
   `, [bookingId]);
 }
 
+// Conservative spending guard: count attempts, not only successful SMS.
+// An uncertain provider response may still have charged the account.
+async function reserveP1smsSend(pool) {
+  const parsed = Number(process.env.P1SMS_DAILY_LIMIT || 2);
+  const limit = Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= 100 ? parsed : 2;
+  const result = await pool.query(`
+    INSERT INTO p1sms_daily_usage(day, attempted)
+    VALUES ((NOW() AT TIME ZONE 'Europe/Moscow')::date, 1)
+    ON CONFLICT (day) DO UPDATE
+      SET attempted = p1sms_daily_usage.attempted + 1
+      WHERE p1sms_daily_usage.attempted < $1
+    RETURNING attempted
+  `, [limit]);
+  if (!result.rowCount) throw new Error("P1SMS daily SMS limit reached");
+}
+
 function formatDate(iso) {
   const [year, month, day] = iso.split("-");
   return day + "." + month + "." + year;
@@ -139,6 +155,7 @@ export async function processNotifications(pool, maxCount = 15) {
       } else if (b.reminder_channel === "sms" && p1smsReady()) {
         const phone = smsPhone(b.phone);
         if (!phone) throw new Error("Invalid mobile number");
+        await reserveP1smsSend(pool);
         await sendP1sms(phone, message);
       } else {
         throw new Error("Selected notification channel is not ready");
