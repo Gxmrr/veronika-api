@@ -47,16 +47,16 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
   serviceInput.replaceChildren(
     new Option("Выберите основную услугу", ""),
     new Option("Простой маникюр", "basic"),
-    new Option("Маникюр в один тон", "color"),
+    new Option("Маникюр с гель-лаком", "color"),
     new Option("Маникюр с дизайном", "design")
   );
   const extras = [
-    { key: "repair", label: "Ремонт ногтей", minutes: 15 },
-    { key: "extension", label: "Донаращивание ногтей", minutes: 25 },
-    { key: "nails", label: "Наращивание ногтей", minutes: 25 }
+    { key: "repair", label: "Ремонт ногтей", minutes: 10 },
+    { key: "extension", label: "Донаращивание ногтей", minutes: 15 },
+    { key: "nails", label: "Наращивание ногтей", minutes: 20 }
   ];
   const counts = { repair: 0, extension: 0, nails: 0 };
-  const baseDurations = { basic: 60, color: 90, design: 120 };
+  const baseDurations = { basic: 45, color: 75, design: 90 };
   const selectedAddons = () => Object.fromEntries(
     Object.entries(counts).filter(([, quantity]) => quantity > 0)
   );
@@ -151,6 +151,76 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
     if (typeof updateTimeHint === "function") updateTimeHint();
     if (reload && typeof loadAvailableTimes === "function") loadAvailableTimes();
   }
+
+
+  // Клиент выбирает отдельный канал напоминания. Не подписываем без согласия.
+  const reminderSection = document.createElement("section");
+  reminderSection.className = "booking-reminder-choice";
+  const reminderLabel = document.createElement("label");
+  reminderLabel.htmlFor = "reminder-channel";
+  reminderLabel.textContent = "Куда отправить напоминание за час до записи?";
+  const reminderSelect = document.createElement("select");
+  reminderSelect.id = "reminder-channel";
+  reminderSelect.name = "reminderChannel";
+  const noReminder = new Option("Не нужно напоминание", "none");
+  const telegramOption = new Option("Telegram — проверяем подключение", "telegram");
+  const smsOption = new Option("Обычное SMS — проверяем подключение", "sms");
+  telegramOption.disabled = true;
+  smsOption.disabled = true;
+  reminderSelect.add(noReminder);
+  reminderSelect.add(telegramOption);
+  reminderSelect.add(smsOption);
+  const reminderHelp = document.createElement("p");
+  reminderHelp.className = "booking-reminder-help";
+  reminderHelp.textContent = "Доступность Telegram и SMS проверяется. Можно записаться без напоминания.";
+  reminderSection.append(reminderLabel, reminderSelect, reminderHelp);
+  const bookingDateGroup = dateInput.closest(".booking-picker-row") ||
+    dateInput.closest(".form-columns") || dateInput.parentElement;
+  if (bookingDateGroup && bookingDateGroup !== form) {
+    bookingDateGroup.before(reminderSection);
+  } else {
+    addonSection.after(reminderSection);
+  }
+
+  if (!document.getElementById("veronika-reminder-styles")) {
+    const style = document.createElement("style");
+    style.id = "veronika-reminder-styles";
+    style.textContent = [
+      "#booking-form .booking-reminder-choice{width:100%;grid-column:1/-1;min-width:0;margin:12px 0 24px}",
+      "#booking-form .booking-reminder-choice label{display:block;margin:0 0 10px;font:500 13px Manrope,sans-serif;color:#252322}",
+      "#booking-form .booking-reminder-choice select{width:100%;min-width:0;padding:15px;border:1px solid #dcd8d1;border-radius:8px;background:#faf8f5;color:#252322;font:13px Manrope,sans-serif}",
+      "#booking-form .booking-reminder-help{margin:8px 0 0;color:#77726d;font:12px/1.55 Manrope,sans-serif}"
+    ].join("\n");
+    document.head.append(style);
+  }
+
+  reminderSelect.addEventListener("change", () => {
+    if (reminderSelect.value === "telegram") {
+      reminderHelp.textContent = "После записи откройте Telegram по персональной ссылке и запустите бота. Только после этого напоминание будет подключено.";
+    } else if (reminderSelect.value === "sms") {
+      reminderHelp.textContent = "Обычное SMS придёт на номер, указанный выше, при работающем SMS-шлюзе.";
+    } else {
+      reminderHelp.textContent = "Напоминания отправляться не будут.";
+    }
+  });
+
+  fetch(API_BASE + "/api/reminder-options", { cache: "no-store" })
+    .then(async response => {
+      if (!response.ok) throw new Error("reminder-options unavailable");
+      const data = await response.json();
+      telegramOption.disabled = !data.telegram;
+      smsOption.disabled = !data.sms;
+      telegramOption.textContent = data.telegram
+        ? "Telegram (бесплатно)" : "Telegram (пока не подключён)";
+      smsOption.textContent = data.sms
+        ? "Обычное SMS" : "Обычное SMS (пока не подключено)";
+      reminderHelp.textContent = data.sms
+        ? "Выберите удобный способ. Для Telegram после записи нужно запустить бота."
+        : "SMS-шлюз пока не подключён. Можно выбрать Telegram, если бот настроен, или записаться без напоминания.";
+    })
+    .catch(() => {
+      reminderHelp.textContent = "Проверить способы напоминания пока не получилось. Можно записаться без напоминания.";
+    });
 
   const today = dateInMoscow();
   const maxDay = new Date(today + "T12:00:00Z");
@@ -423,6 +493,7 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
           phone: phoneInput.value,
           service: serviceInput.value,
           addons: selectedAddons(),
+          reminderChannel: reminderSelect.value,
           date: chosenDate,
           time: chosenTime
         })
@@ -435,7 +506,8 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
       ++slotVersion;
       ++validationVersion;
       setEmpty("Выберите дату и услугу, чтобы увидеть свободное время.");
-      setMessage("Вы успешно записаны на " + chosenDate + " в " + chosenTime + ".");
+      setMessage("Вы успешно записаны на " + chosenDate + " в " + chosenTime + (data.reminderChannel === "sms" ? ". Напоминание придёт по SMS за час." : "."));
+      reminderSelect.dispatchEvent(new Event("change"));
       if (typeof data.telegramLink === "string" &&
           /^https:\/\/t\.me\/[A-Za-z0-9_]{5,32}\?start=[A-Za-z0-9_-]{20,64}$/.test(data.telegramLink)) {
         const reminderLink = document.createElement("a");
