@@ -127,7 +127,7 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
       updateAddons();
     });
     plus.addEventListener("click", () => {
-      if (!serviceInput.value || totalMinutes() + item.minutes > 480) return;
+      if (!serviceInput.value || !Number.isSafeInteger(counts[item.key] + 1)) return;
       counts[item.key]++;
       updateAddons();
     });
@@ -139,11 +139,14 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
       const control = addonControls[item.key];
       control.count.textContent = String(counts[item.key]);
       control.minus.disabled = counts[item.key] === 0;
-      control.plus.disabled = !serviceInput.value || total + item.minutes > 480;
+      control.plus.disabled = !serviceInput.value;
     }
     addonTotal.textContent = serviceInput.value
       ? "Общее время: " + Math.floor(total / 60) + " ч " +
-        String(total % 60).padStart(2, "0") + " мин. Учтено в расписании."
+        String(total % 60).padStart(2, "0") + " мин. " +
+        (total > 480
+          ? "Выбранные процедуры не помещаются в рабочий день (12:00–20:00)."
+          : "Учтено в расписании.")
       : "Сначала выберите основную услугу.";
     if (typeof updateTimeHint === "function") updateTimeHint();
     if (reload && typeof loadAvailableTimes === "function") loadAvailableTimes();
