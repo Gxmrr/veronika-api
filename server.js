@@ -2,7 +2,8 @@ import express from "express";
 import { initNotifications, queueReminder, queueReschedule, smsPhone, processNotifications } from "./notifications.js";
 import { Pool } from "pg";
 import { rateLimit } from "express-rate-limit";
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { telegramReady, telegramClientLink, configureTelegramWebhook, processTelegramUpdate } from "./telegram.js";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -325,6 +326,23 @@ app.post("/api/internal/notifications/run", async (req, res, next) => {
   }
 });
 
+// Telegram authenticates webhook calls with a secret header.
+app.post("/api/internal/telegram/webhook", async (req, res, next) => {
+  const secret = process.env.TELEGRAM_WEBHOOK_SECRET || "";
+  const supplied = req.get("X-Telegram-Bot-Api-Secret-Token") || "";
+  const sha = input => createHash("sha256").update(input, "utf8").digest();
+  if (!telegramReady() || !supplied ||
+      !timingSafeEqual(sha(secret), sha(supplied))) {
+    return res.sendStatus(403);
+  }
+  try {
+    await processTelegramUpdate(pool, req.body);
+    res.sendStatus(200);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/bookings", adminLimiter, async (req, res, next) => {
   if (!process.env.ADMIN_TOKEN || process.env.ADMIN_TOKEN.length < 24) {
     return res.status(503).json({
@@ -533,7 +551,7 @@ app.patch("/api/bookings/:id", adminLimiter, async (req, res, next) => {
     await client.query("COMMIT");
     res.json({ success: true, id, date, time,
       message: changed
-        ? "Запись перенесена. SMS поставлено в очередь уведомлений."
+        ? "Запись перенесена. Напоминания обновлены, уведомление поставлено в очередь (если подключён канал связи)."
         : "Дата и время не изменились." });
   } catch (error) {
     if (client) await client.query("ROLLBACK").catch(() => {});
@@ -625,9 +643,12 @@ app.post("/api/bookings", async (req, res, next) => {
       });
     }
 
+    const telegramToken = telegramReady() ? randomBytes(24).toString("base64url") : null;
+    const telegramHash = telegramToken
+      ? createHash("sha256").update(telegramToken).digest("hex") : null;
     const created = await client.query(
-      "INSERT INTO bookings (visit_date, visit_time, client_name, phone, service, addons) VALUES ($1, $2, $3, $4, $5, $6::jsonb) RETURNING id",
-      [date, time, name, normalizedPhone, service, JSON.stringify(addons)]
+      "INSERT INTO bookings (visit_date, visit_time, client_name, phone, service, addons, telegram_link_token_hash) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7) RETURNING id",
+      [date, time, name, normalizedPhone, service, JSON.stringify(addons), telegramHash]
     );
     await queueReminder(client, created.rows[0].id);
     await client.query("COMMIT");
@@ -635,7 +656,8 @@ app.post("/api/bookings", async (req, res, next) => {
       success: true,
       message: "Запись успешно сохранена.",
       date,
-      time
+      time,
+      telegramLink: telegramToken ? telegramClientLink(telegramToken) : null
     });
   } catch (error) {
     if (client) await client.query("ROLLBACK").catch(() => {});
@@ -685,11 +707,30 @@ async function start() {
 
   // Без потери старых записей: к существующей таблице добавляется JSONB.
   await pool.query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS addons JSONB NOT NULL DEFAULT '{}'::jsonb");
+  await pool.query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS telegram_chat_id BIGINT");
+  await pool.query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS telegram_link_token_hash VARCHAR(64)");
   await initNotifications(pool);
+  // Re-time existing pending reminders to the new one-hour rule.
+  await pool.query(`
+    UPDATE booking_notifications n
+    SET scheduled_at = due, next_attempt_at = due
+    FROM (
+      SELECT id, ((visit_date + visit_time) AT TIME ZONE 'Europe/Moscow')
+        - INTERVAL '1 hour' AS due
+      FROM bookings
+    ) b
+    WHERE n.booking_id = b.id AND n.kind = 'reminder'
+      AND n.status = 'pending'
+      AND n.scheduled_at <> b.due
+  `);
 
   const port = Number(process.env.PORT || 3000);
   app.listen(port, "0.0.0.0", () => {
     console.log(`VERONIKA API started on ${port}`);
+    // Webhook registration requires explicit opt-in environment configuration.
+    configureTelegramWebhook()
+      .then(ok => { if (ok) console.log("Telegram webhook configured"); })
+      .catch(_error => console.error("Telegram webhook setup failed"));
   });
 }
 
