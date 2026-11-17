@@ -51,12 +51,12 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
     new Option("Маникюр с дизайном", "design")
   );
   const extras = [
-    { key: "repair", label: "Ремонт ногтей", minutes: 60 },
-    { key: "extension", label: "Донаращивание ногтей", minutes: 120 },
-    { key: "nails", label: "Наращивание ногтей", minutes: 120 }
+    { key: "repair", label: "Ремонт ногтей", minutes: 15 },
+    { key: "extension", label: "Донаращивание ногтей", minutes: 25 },
+    { key: "nails", label: "Наращивание ногтей", minutes: 25 }
   ];
   const counts = { repair: 0, extension: 0, nails: 0 };
-  const baseDurations = { basic: 60, color: 150, design: 180 };
+  const baseDurations = { basic: 60, color: 90, design: 120 };
   const selectedAddons = () => Object.fromEntries(
     Object.entries(counts).filter(([, quantity]) => quantity > 0)
   );
