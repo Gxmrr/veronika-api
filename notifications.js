@@ -1,4 +1,4 @@
-// Transactional notification outbox for bookings (Telegram opt-in or SMS.ru).
+// VERONIKA notification outbox. Respect the client-selected channel.
 import { telegramSend, telegramReady } from "./telegram.js";
 // SMS sending through SMSTEL will be enabled only after its official API
 // request/response specification is available; do not invent an endpoint.
@@ -6,8 +6,6 @@ export function smstelReady() { return false; }
 async function sendSmstel(_phone, _message) {
   throw new Error("SMSTEL gateway not configured");
 }
-// Secrets must only live in ONREZA environment variables, never in GitHub.
-const API_KEY = process.env.SMS_RU_API_ID || "";
 
 export function smsPhone(input) {
   let digits = String(input || "").replace(/\D/g, "");
@@ -53,13 +51,18 @@ export async function queueReminder(db, bookingId) {
       FROM bookings WHERE id = $1
     ) AS candidate
     WHERE due_at > NOW()
+      AND EXISTS (
+        SELECT 1 FROM bookings b WHERE b.id = candidate.id
+          AND b.reminder_channel IN ('telegram', 'sms')
+      )
   `, [bookingId]);
 }
 
 export async function queueReschedule(db, bookingId) {
   await db.query(`
     INSERT INTO booking_notifications (booking_id, kind, scheduled_at, next_attempt_at)
-    VALUES ($1, 'rescheduled', NOW(), NOW())
+    SELECT id, 'rescheduled', NOW(), NOW() FROM bookings
+    WHERE id = $1 AND reminder_channel IN ('telegram', 'sms')
     ON CONFLICT (booking_id, kind) DO UPDATE
     SET scheduled_at = NOW(), next_attempt_at = NOW(), status = 'pending',
       attempts = 0, revision = booking_notifications.revision + 1,
