@@ -47,8 +47,7 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
   serviceInput.replaceChildren(
     new Option("Выберите основную услугу", ""),
     new Option("Простой маникюр", "basic"),
-    new Option("Маникюр с гель-лаком", "color"),
-    new Option("Маникюр с дизайном", "design")
+    new Option("Маникюр с гель-лаком", "color")
   );
   const extras = [
     { key: "repair", label: "Ремонт ногтей", minutes: 10 },
@@ -56,7 +55,7 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
     { key: "nails", label: "Наращивание ногтей", minutes: 20 }
   ];
   const counts = { repair: 0, extension: 0, nails: 0 };
-  const baseDurations = { basic: 45, color: 75, design: 90 };
+  const baseDurations = { basic: 45, color: 75 };
   const selectedAddons = () => Object.fromEntries(
     Object.entries(counts).filter(([, quantity]) => quantity > 0)
   );
