@@ -1,5 +1,6 @@
 import express from "express";
-import { initNotifications, queueReminder, queueReschedule, smsPhone, processNotifications, smstelReady } from "./notifications.js";
+import { initNotifications, queueReminder, queueReschedule, smsPhone, processNotifications } from "./notifications.js";
+import { p1smsReady, p1smsConfigured, sendP1sms } from "./p1sms.js";
 import { Pool } from "pg";
 import { rateLimit } from "express-rate-limit";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -217,7 +218,7 @@ function futureSlot(date, time) {
 // Public methods: do not reveal any API keys.
 app.get("/api/reminder-options", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
-  res.json({ telegram: telegramReady(), sms: smstelReady() });
+  res.json({ telegram: telegramReady(), sms: p1smsReady() });
 });
 
 // Проверка связи с базой
@@ -333,6 +334,43 @@ app.post("/api/internal/notifications/run", async (req, res, next) => {
 });
 
 // Telegram authenticates webhook calls with a secret header.
+// Manual one-message test: admin-only, ONLY to the server-configured own number.
+// A daily DB lock prevents accidental repetitions that could consume trial credit.
+app.post("/api/admin/p1sms/test", adminLimiter, async (req, res, next) => {
+  if (!authorized(req)) return res.status(401).json({ error: "Неверный ключ администратора." });
+  if (!p1smsConfigured() || !process.env.P1SMS_TEST_PHONE) {
+    return res.status(503).json({
+      error: "Для теста настройте P1SMS_API_KEY, P1SMS_CHANNEL и P1SMS_TEST_PHONE в ONREZA."
+    });
+  }
+  try {
+    const claim = await pool.query(`
+      INSERT INTO p1sms_test_log(day, result)
+      VALUES ((NOW() AT TIME ZONE 'Europe/Moscow')::date, 'attempted')
+      ON CONFLICT (day) DO NOTHING RETURNING day
+    `);
+    if (!claim.rowCount) {
+      return res.status(429).json({
+        error: "Сегодня тест P1SMS уже запускался. Проверьте историю в кабинете; повторять платную отправку автоматически нельзя."
+      });
+    }
+    try {
+      await sendP1sms(process.env.P1SMS_TEST_PHONE,
+        "VERONIKA: test SMS. P1SMS API connection.");
+      await pool.query(`UPDATE p1sms_test_log SET result = 'accepted'
+        WHERE day = (NOW() AT TIME ZONE 'Europe/Moscow')::date`);
+      res.json({ success: true,
+        message: "P1SMS принял тестовый запрос. Доставку проверьте на своём телефоне и в кабинете." });
+    } catch (error) {
+      await pool.query(`UPDATE p1sms_test_log SET result = 'uncertain'
+        WHERE day = (NOW() AT TIME ZONE 'Europe/Moscow')::date`).catch(() => {});
+      res.status(502).json({
+        error: "Не удалось подтвердить отправку. Проверьте историю P1SMS и баланс до любого повторного теста."
+      });
+    }
+  } catch (error) { next(error); }
+});
+
 app.post("/api/internal/telegram/webhook", async (req, res, next) => {
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET || "";
   const supplied = req.get("X-Telegram-Bot-Api-Secret-Token") || "";
@@ -631,8 +669,8 @@ app.post("/api/bookings", async (req, res, next) => {
     if (reminderChannel === "telegram" && !telegramReady()) {
       return res.status(503).json({ error: "Telegram-напоминания пока не настроены." });
     }
-    if (reminderChannel === "sms" && !smstelReady()) {
-      return res.status(503).json({ error: "SMS через SMSTEL пока не подключены." });
+    if (reminderChannel === "sms" && !p1smsReady()) {
+      return res.status(503).json({ error: "SMS через P1SMS пока не подключены." });
     }
 
     if (name.length < 2 || name.length > 80 ||
@@ -728,6 +766,13 @@ async function start() {
   await pool.query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS addons JSONB NOT NULL DEFAULT '{}'::jsonb");
   await pool.query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS telegram_chat_id BIGINT");
   await pool.query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS telegram_link_token_hash VARCHAR(64)");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS p1sms_test_log (
+      day DATE PRIMARY KEY,
+      attempted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      result VARCHAR(24) NOT NULL
+    )
+  `);
   await pool.query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS reminder_channel VARCHAR(16) NOT NULL DEFAULT 'none'");
   // Preserve previously linked Telegram users.
   await pool.query("UPDATE bookings SET reminder_channel = 'telegram' WHERE telegram_chat_id IS NOT NULL AND reminder_channel = 'none'");
