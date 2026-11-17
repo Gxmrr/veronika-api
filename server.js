@@ -1,4 +1,5 @@
 import express from "express";
+import { initNotifications, queueReminder, queueReschedule, smsPhone, processNotifications } from "./notifications.js";
 import { Pool } from "pg";
 import { rateLimit } from "express-rate-limit";
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -249,6 +250,24 @@ function authorized(req) {
   return timingSafeEqual(digest(secret), digest(token));
 }
 
+// External scheduler runs this every minute using a protected secret.
+app.post("/api/internal/notifications/run", async (req, res, next) => {
+  const secret = process.env.REMINDER_CRON_TOKEN || "";
+  const header = req.get("Authorization") || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const digest = value => createHash("sha256").update(value, "utf8").digest();
+  if (secret.length < 24 || !token ||
+      !timingSafeEqual(digest(secret), digest(token))) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await processNotifications(pool));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/bookings", adminLimiter, async (req, res, next) => {
   if (!process.env.ADMIN_TOKEN || process.env.ADMIN_TOKEN.length < 24) {
     return res.status(503).json({
@@ -417,7 +436,8 @@ app.patch("/api/bookings/:id", adminLimiter, async (req, res, next) => {
     // Блокируем старую и новую дату в одном порядке, чтобы не было гонок.
     await acquireDateLocks(client, [previousDate, date]);
     const current = await client.query(
-      `SELECT to_char(visit_date, 'YYYY-MM-DD') AS date, service
+      `SELECT to_char(visit_date, 'YYYY-MM-DD') AS date,
+         to_char(visit_time, 'HH24:MI') AS time, service
        FROM bookings WHERE id = $1 FOR UPDATE`,
       [id]
     );
@@ -442,12 +462,20 @@ app.patch("/api/bookings/:id", adminLimiter, async (req, res, next) => {
       });
     }
 
-    await client.query(
-      "UPDATE bookings SET visit_date = $1, visit_time = $2 WHERE id = $3",
-      [date, time, id]
-    );
+    const changed = current.rows[0].date !== date || current.rows[0].time !== time;
+    if (changed) {
+      await client.query(
+        "UPDATE bookings SET visit_date = $1, visit_time = $2 WHERE id = $3",
+        [date, time, id]
+      );
+      await queueReminder(client, id);
+      await queueReschedule(client, id);
+    }
     await client.query("COMMIT");
-    res.json({ success: true, id, date, time, message: "Запись перенесена." });
+    res.json({ success: true, id, date, time,
+      message: changed
+        ? "Запись перенесена. SMS поставлено в очередь уведомлений."
+        : "Дата и время не изменились." });
   } catch (error) {
     if (client) await client.query("ROLLBACK").catch(() => {});
     if (error.code === "23505") {
@@ -510,10 +538,10 @@ app.post("/api/bookings", async (req, res, next) => {
     const phone = typeof data.phone === "string" ? data.phone.trim() : "";
     const service = services.get(data.service);
     const { date, time } = data;
-    const digits = phone.replace(/\D/g, "");
+    const normalizedPhone = smsPhone(phone);
 
     if (name.length < 2 || name.length > 80 ||
-        digits.length < 10 || digits.length > 15 ||
+        !normalizedPhone ||
         !service || !validDate(date) ||
         !futureSlot(date, time) || !fitsSchedule(time, service)) {
       return res.status(400).json({
@@ -537,10 +565,11 @@ app.post("/api/bookings", async (req, res, next) => {
       });
     }
 
-    await client.query(
-      "INSERT INTO bookings (visit_date, visit_time, client_name, phone, service) VALUES ($1, $2, $3, $4, $5)",
-      [date, time, name, phone, service]
+    const created = await client.query(
+      "INSERT INTO bookings (visit_date, visit_time, client_name, phone, service) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+      [date, time, name, normalizedPhone, service]
     );
+    await queueReminder(client, created.rows[0].id);
     await client.query("COMMIT");
     res.status(201).json({
       success: true,
@@ -593,6 +622,8 @@ async function start() {
       CONSTRAINT valid_manual_break CHECK (start_time < end_time)
     )
   `);
+
+  await initNotifications(pool);
 
   const port = Number(process.env.PORT || 3000);
   app.listen(port, "0.0.0.0", () => {
