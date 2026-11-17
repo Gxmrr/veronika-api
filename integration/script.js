@@ -387,10 +387,11 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
   dateInput.addEventListener("change", loadAvailableTimes);
   serviceInput.addEventListener("change", () => updateAddons());
   timeInput.addEventListener("input", () => {
-    // 1230 превращается в 12:30, а 12:30 остаётся 12:30.
-    let value = timeInput.value.replace(/[^\d:]/g, "");
-    if (/^\d{4}$/.test(value)) value = value.slice(0, 2) + ":" + value.slice(2);
-    timeInput.value = value.slice(0, 5);
+    // Автоматическая маска: 123 -> 12:3, 1230 -> 12:30.
+    const digits = timeInput.value.replace(/\D/g, "").slice(0, 4);
+    timeInput.value = digits.length > 2
+      ? digits.slice(0, 2) + ":" + digits.slice(2)
+      : digits;
     highlightTime();
     renderTimeDropdown(false);
     clearTimeout(checkTimer);
