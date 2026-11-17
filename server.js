@@ -52,10 +52,55 @@ const BREAK_MINUTES = 180;
 const durations = new Map([
   ["Простой маникюр", 60],
   ["Маникюр в один тон", 150],
+  ["Маникюр с дизайном", 180],
   ["Ремонт ногтя", 60],
   ["Донаращивание ногтя", 120],
   ["Наращивание ногтя", 120]
 ]);
+
+// Дополнительные услуги и их продолжительность на одну позицию.
+// Для наращивания сохраняем ранее установленный норматив 2 часа.
+const addonDurations = Object.freeze({
+  repair: 60,
+  extension: 120,
+  nails: 120
+});
+
+// Никакого жёсткого лимита числа дополнительных услуг в интерфейсе.
+// Но количество должно быть неотрицательным целым и помещаться в рабочий день.
+function parseAddons(value) {
+  if (value === undefined || value === null || value === "") return {};
+  let data = value;
+  if (typeof data === "string") {
+    if (data.length > 500) return null;
+    try { data = JSON.parse(data); } catch (_error) { return null; }
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const keys = Object.keys(data);
+  if (keys.some(key => !Object.hasOwn(addonDurations, key))) return null;
+  const parsed = {};
+  for (const key of keys) {
+    const quantity = data[key];
+    if (!Number.isSafeInteger(quantity) || quantity < 0) return null;
+    if (quantity > 0) parsed[key] = quantity;
+  }
+  return parsed;
+}
+
+function durationOf(service, addons = {}) {
+  const base = durations.get(service);
+  if (!Number.isFinite(base)) return NaN;
+  return base + Object.entries(addons || {}).reduce(
+    (total, [key, quantity]) => total + (addonDurations[key] || 0) * quantity, 0
+  );
+}
+
+function slotStep(service, addons = {}) {
+  return service === "Донаращивание ногтя" ||
+    service === "Наращивание ногтя" ||
+    Number(addons.extension || 0) > 0 ||
+    Number(addons.nails || 0) > 0 ? 120 : 60;
+}
 
 function minuteOfDay(value) {
   if (typeof value !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) {
@@ -70,17 +115,17 @@ function asTime(minutes) {
     String(minutes % 60).padStart(2, "0");
 }
 
-function fitsSchedule(time, service) {
+function fitsSchedule(time, service, addons = {}) {
   const start = minuteOfDay(time);
-  const duration = durations.get(service);
+  const duration = durationOf(service, addons);
   return Number.isFinite(start) && Number.isFinite(duration) &&
     start >= OPEN_MINUTES && start + duration <= CLOSE_MINUTES;
 }
 
-function timeIsAvailable(time, service, existing, manualBreaks = []) {
-  if (!fitsSchedule(time, service)) return false;
+function timeIsAvailable(time, service, existing, manualBreaks = [], addons = {}) {
+  if (!fitsSchedule(time, service, addons)) return false;
   const start = minuteOfDay(time);
-  const end = start + durations.get(service);
+  const end = start + durationOf(service, addons);
   const clearOfBreaks = manualBreaks.every(item => {
     const from = minuteOfDay(item.start);
     const to = minuteOfDay(item.end);
@@ -90,7 +135,7 @@ function timeIsAvailable(time, service, existing, manualBreaks = []) {
   return clearOfBreaks && existing.every(row => {
     const bookedStart = minuteOfDay(row.time);
     // Для записей со старыми названиями используем безопасную длительность 2,5 часа.
-    const bookedDuration = durations.get(row.service) || 150;
+    const bookedDuration = durationOf(row.service, row.addons) || 150;
     const bookedEnd = bookedStart + bookedDuration;
     // Запрет пересечений и трёхчасовой интервал между процедурами.
     return start >= bookedEnd + BREAK_MINUTES ||
@@ -100,7 +145,7 @@ function timeIsAvailable(time, service, existing, manualBreaks = []) {
 
 async function bookingsForDate(db, date, excludedId = null) {
   const result = await db.query(
-    `SELECT to_char(visit_time, 'HH24:MI') AS time, service FROM bookings
+    `SELECT to_char(visit_time, 'HH24:MI') AS time, service, addons FROM bookings
      WHERE visit_date = $1 AND ($2::bigint IS NULL OR id <> $2::bigint)`,
     [date, excludedId]
   );
@@ -121,11 +166,13 @@ async function manualBreaksForDate(db, date) {
 const services = new Map([
   ["basic", "Простой маникюр"],
   ["color", "Маникюр в один тон"],
+  ["design", "Маникюр с дизайном"],
   ["repair", "Ремонт ногтя"],
   ["extension", "Донаращивание ногтя"],
   ["nails", "Наращивание ногтя"],
   ["Простой маникюр", "Простой маникюр"],
   ["Маникюр в один тон", "Маникюр в один тон"],
+  ["Маникюр с дизайном", "Маникюр с дизайном"],
   ["Ремонт ногтя", "Ремонт ногтя"],
   ["Донаращивание", "Донаращивание ногтя"],
   ["Донаращивание ногтя", "Донаращивание ногтя"],
@@ -179,18 +226,18 @@ app.get("/api/slots", async (req, res, next) => {
   try {
     const date = req.query.date;
     const service = services.get(req.query.service || "color");
-    if (!validDate(date) || !service) {
+    const addons = parseAddons(req.query.addons);
+    if (!validDate(date) || !service || addons === null) {
       return res.status(400).json({ error: "Укажите рабочую дату и услугу." });
     }
     const [existing, manualBreaks] = await Promise.all([
       bookingsForDate(pool, date), manualBreaksForDate(pool, date)
     ]);
     const times = [];
-    const stepMinutes = (service === "Донаращивание ногтя" ||
-      service === "Наращивание ногтя") ? 120 : 60;
+    const stepMinutes = slotStep(service, addons);
     for (let minute = OPEN_MINUTES; minute < CLOSE_MINUTES; minute += stepMinutes) {
       const time = asTime(minute);
-      if (futureSlot(date, time) && timeIsAvailable(time, service, existing, manualBreaks)) {
+      if (futureSlot(date, time) && timeIsAvailable(time, service, existing, manualBreaks, addons)) {
         times.push(time);
       }
     }
@@ -206,14 +253,16 @@ app.get("/api/availability", async (req, res, next) => {
   try {
     const { date, time } = req.query;
     const service = services.get(req.query.service);
-    if (!validDate(date) || !service || !Number.isFinite(minuteOfDay(time))) {
+    const addons = parseAddons(req.query.addons);
+    if (!validDate(date) || !service || addons === null ||
+        !Number.isFinite(minuteOfDay(time))) {
       return res.status(400).json({ error: "Выберите дату, услугу и время." });
     }
     const [existing, manualBreaks] = await Promise.all([
       bookingsForDate(pool, date), manualBreaksForDate(pool, date)
     ]);
     const available = futureSlot(date, time) &&
-      timeIsAvailable(time, service, existing, manualBreaks);
+      timeIsAvailable(time, service, existing, manualBreaks, addons);
     res.setHeader("Cache-Control", "no-store");
     res.json({
       date, time, available,
@@ -289,7 +338,8 @@ app.get("/api/bookings", adminLimiter, async (req, res, next) => {
           to_char(visit_time, 'HH24:MI') AS time,
           client_name AS name,
           phone,
-          service
+          service,
+          addons
         FROM bookings
         ORDER BY visit_date DESC, visit_time DESC
         LIMIT 100`
@@ -349,7 +399,7 @@ app.post("/api/breaks", adminLimiter, async (req, res, next) => {
     const existing = await bookingsForDate(client, date);
     const conflict = existing.some(item => {
       const bookedStart = minuteOfDay(item.time);
-      const bookedEnd = bookedStart + (durations.get(item.service) || 150);
+      const bookedEnd = bookedStart + (durationOf(item.service, item.addons) || 150);
       return startMinutes < bookedEnd && endMinutes > bookedStart;
     });
     if (conflict) {
@@ -439,7 +489,7 @@ app.patch("/api/bookings/:id", adminLimiter, async (req, res, next) => {
     await acquireDateLocks(client, [previousDate, date]);
     const current = await client.query(
       `SELECT to_char(visit_date, 'YYYY-MM-DD') AS date,
-         to_char(visit_time, 'HH24:MI') AS time, service
+         to_char(visit_time, 'HH24:MI') AS time, service, addons
        FROM bookings WHERE id = $1 FOR UPDATE`,
       [id]
     );
@@ -448,7 +498,8 @@ app.patch("/api/bookings/:id", adminLimiter, async (req, res, next) => {
       return res.status(409).json({ error: "Запись изменилась. Обновите журнал и повторите." });
     }
     const service = current.rows[0].service;
-    if (!fitsSchedule(time, service)) {
+    const addons = current.rows[0].addons || {};
+    if (!fitsSchedule(time, service, addons)) {
       await client.query("ROLLBACK");
       return res.status(400).json({
         error: "Процедура не помещается в рабочий день (12:00–20:00)."
@@ -457,7 +508,7 @@ app.patch("/api/bookings/:id", adminLimiter, async (req, res, next) => {
 
     const booked = await bookingsForDate(client, date, id);
     const breaks = await manualBreaksForDate(client, date);
-    if (!timeIsAvailable(time, service, booked, breaks)) {
+    if (!timeIsAvailable(time, service, booked, breaks, addons)) {
       await client.query("ROLLBACK");
       return res.status(409).json({
         error: "Выбранное время занято, закрыто или нарушает трёхчасовой перерыв."
@@ -539,13 +590,14 @@ app.post("/api/bookings", async (req, res, next) => {
     const name = typeof data.name === "string" ? data.name.trim() : "";
     const phone = typeof data.phone === "string" ? data.phone.trim() : "";
     const service = services.get(data.service);
+    const addons = parseAddons(data.addons);
     const { date, time } = data;
     const normalizedPhone = smsPhone(phone);
 
     if (name.length < 2 || name.length > 80 ||
         !normalizedPhone ||
-        !service || !validDate(date) ||
-        !futureSlot(date, time) || !fitsSchedule(time, service)) {
+        !service || addons === null || !validDate(date) ||
+        !futureSlot(date, time) || !fitsSchedule(time, service, addons)) {
       return res.status(400).json({
         error: "Проверьте имя, телефон, услугу, дату и время работы (12:00–20:00)."
       });
@@ -560,7 +612,7 @@ app.post("/api/bookings", async (req, res, next) => {
 
     const existing = await bookingsForDate(client, date);
     const manualBreaks = await manualBreaksForDate(client, date);
-    if (!timeIsAvailable(time, service, existing, manualBreaks)) {
+    if (!timeIsAvailable(time, service, existing, manualBreaks, addons)) {
       await client.query("ROLLBACK");
       return res.status(409).json({
         error: "Время закрыто мастером, занято или недостаточно трёхчасового перерыва."
@@ -568,8 +620,8 @@ app.post("/api/bookings", async (req, res, next) => {
     }
 
     const created = await client.query(
-      "INSERT INTO bookings (visit_date, visit_time, client_name, phone, service) VALUES ($1, $2, $3, $4, $5) RETURNING id",
-      [date, time, name, normalizedPhone, service]
+      "INSERT INTO bookings (visit_date, visit_time, client_name, phone, service, addons) VALUES ($1, $2, $3, $4, $5, $6::jsonb) RETURNING id",
+      [date, time, name, normalizedPhone, service, JSON.stringify(addons)]
     );
     await queueReminder(client, created.rows[0].id);
     await client.query("COMMIT");
@@ -625,6 +677,8 @@ async function start() {
     )
   `);
 
+  // Без потери старых записей: к существующей таблице добавляется JSONB.
+  await pool.query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS addons JSONB NOT NULL DEFAULT '{}'::jsonb");
   await initNotifications(pool);
 
   const port = Number(process.env.PORT || 3000);
