@@ -27,6 +27,9 @@ app.use((req, res, next) => {
 
 app.use("/api", rateLimit({
   windowMs: 15 * 60 * 1000,
+  // Администратор с валидным ключом не ограничен лимитами для гостей.
+  // Публичные запросы по-прежнему имеют ограничение.
+  skip: req => authorized(req),
   limit: 60,
   standardHeaders: "draft-7",
   legacyHeaders: false,
@@ -283,6 +286,9 @@ app.get("/admin", (_req, res) => {
 
 const adminLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
+  // Не считаем действия мастера, если секретный токен подтверждён.
+  // Неправильные ключи по-прежнему ограничены 12 попытками.
+  skip: req => authorized(req),
   limit: 12,
   standardHeaders: "draft-7",
   legacyHeaders: false,
