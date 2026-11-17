@@ -91,6 +91,12 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
   const timeHelp = document.createElement("div");
   timeHelp.className = "booking-time-caption";
   timeHelp.textContent = "СВОБОДНОЕ ВРЕМЯ · ИЛИ ВВЕДИТЕ СВОЁ";
+  function updateTimeHint() {
+    const extension = ["extension", "nails", "Донаращивание", "Донаращивание ногтя", "Наращивание", "Наращивание ногтя"].includes(serviceInput.value);
+    timeHelp.textContent = extension
+      ? "СВОБОДНОЕ ВРЕМЯ · ШАГ 2 ЧАСА · ИЛИ ВВЕДИТЕ СВОЁ"
+      : "СВОБОДНОЕ ВРЕМЯ · ШАГ 1 ЧАС · ИЛИ ВВЕДИТЕ СВОЁ";
+  }
   const slotGrid = document.createElement("div");
   slotGrid.className = "booking-time-grid";
   suggestions.append(timeHelp, slotGrid);
@@ -195,7 +201,10 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
   }
 
   dateInput.addEventListener("change", loadAvailableTimes);
-  serviceInput.addEventListener("change", loadAvailableTimes);
+  serviceInput.addEventListener("change", () => {
+    updateTimeHint();
+    loadAvailableTimes();
+  });
   timeInput.addEventListener("input", () => {
     // 1230 превращается в 12:30, а 12:30 остаётся 12:30.
     let value = timeInput.value.replace(/[^\d:]/g, "");
@@ -209,6 +218,7 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
   });
   timeInput.addEventListener("change", checkManualTime);
 
+  updateTimeHint();
   setEmpty("Выберите дату и услугу, чтобы увидеть свободное время.");
   if (dateInput.value && serviceInput.value) loadAvailableTimes();
 
