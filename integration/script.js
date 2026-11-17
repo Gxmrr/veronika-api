@@ -167,30 +167,98 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
   dateInput.before(calendarShell);
   calendarShell.append(dateInput);
 
-  const calendarButton = document.createElement("button");
-  calendarButton.type = "button";
-  calendarButton.className = "booking-calendar-button";
-  calendarButton.setAttribute("aria-label", "Открыть календарь");
-  calendarButton.textContent = "▦";
-  calendarShell.append(calendarButton);
-  function openCalendar() {
+  // Не рисуем вторую иконку: Safari уже показывает встроенную.
+  // Дополнительная иконка раньше сдвигала календарь внутрь поля.
+  dateInput.addEventListener("click", () => {
     if (typeof dateInput.showPicker === "function") {
-      try { dateInput.showPicker(); return; } catch (_error) {}
+      try { dateInput.showPicker(); } catch (_error) { dateInput.focus(); }
     }
-    dateInput.focus();
-  }
-  calendarButton.addEventListener("click", openCalendar);
-  dateInput.addEventListener("click", openCalendar);
+  });
 
   // Простое текстовое поле: можно набрать 12:30, а можно выбрать кнопкой.
   timeInput.type = "text";
   timeInput.required = true;
-  timeInput.placeholder = "Например, 12:30";
+  timeInput.placeholder = "Выберите время или введите 12:30";
   timeInput.inputMode = "numeric";
   timeInput.maxLength = 5;
   timeInput.pattern = "(?:[01][0-9]|2[0-3]):[0-5][0-9]";
   timeInput.title = "Введите время в формате ЧЧ:ММ, например 12:30";
   timeInput.autocomplete = "off";
+
+  // Выбор свободного времени непосредственно в поле, с поддержкой ручного ввода.
+  const timeContainer = timeInput.parentElement;
+  timeContainer.classList.add("booking-time-field");
+  const timeDropdown = document.createElement("div");
+  timeDropdown.className = "booking-time-dropdown";
+  timeDropdown.id = "booking-time-dropdown";
+  timeDropdown.setAttribute("role", "listbox");
+  timeDropdown.setAttribute("aria-label", "Свободные варианты времени");
+  timeDropdown.hidden = true;
+  timeInput.after(timeDropdown);
+  timeInput.setAttribute("aria-controls", "booking-time-dropdown");
+  timeInput.setAttribute("aria-expanded", "false");
+  let availableTimes = [];
+  function hideTimeDropdown() {
+    timeDropdown.hidden = true;
+    timeInput.setAttribute("aria-expanded", "false");
+  }
+  function setSelectedTime(time) {
+    timeInput.value = time;
+    clearTimeout(checkTimer);
+    ++validationVersion;
+    highlightTime();
+    hideTimeDropdown();
+    setMessage("Выбрано свободное время: " + time + ".");
+  }
+  function renderTimeDropdown(showAll = false) {
+    timeDropdown.replaceChildren();
+    const prefix = showAll ? "" : timeInput.value.trim();
+    const filtered = availableTimes
+      .filter(time => !prefix || time.startsWith(prefix));
+    if (!filtered.length) {
+      hideTimeDropdown();
+      return;
+    }
+    for (const time of filtered) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "booking-time-dropdown-option";
+      button.setAttribute("role", "option");
+      button.textContent = time;
+      button.addEventListener("click", () => setSelectedTime(time));
+      timeDropdown.append(button);
+    }
+    timeDropdown.hidden = false;
+    timeInput.setAttribute("aria-expanded", "true");
+  }
+  timeInput.addEventListener("focus", () => renderTimeDropdown(true));
+  timeInput.addEventListener("click", () => renderTimeDropdown(true));
+  timeInput.addEventListener("keydown", event => {
+    if (event.key === "Escape") hideTimeDropdown();
+  });
+  document.addEventListener("pointerdown", event => {
+    if (!timeContainer.contains(event.target)) hideTimeDropdown();
+  });
+
+  if (!document.getElementById("veronika-picker-fixes")) {
+    const pickerStyle = document.createElement("style");
+    pickerStyle.id = "veronika-picker-fixes";
+    pickerStyle.textContent = [
+      "#booking-form .booking-calendar-shell{position:relative;width:100%;min-width:0}",
+      "#booking-form .booking-calendar-shell input[type=date]{display:block;width:100%;min-width:0;height:56px;box-sizing:border-box;padding:0 15px;cursor:pointer;appearance:auto}",
+      "#booking-form .booking-calendar-shell input[type=date]::-webkit-calendar-picker-indicator{position:static;display:block;opacity:1;margin:0;cursor:pointer}",
+      "#booking-form .booking-calendar-button{display:none!important}",
+      "#booking-form .booking-time-field{position:relative;min-width:0;overflow:visible}",
+      "#booking-form .booking-time-dropdown[hidden]{display:none!important}",
+      "#booking-form .booking-time-dropdown{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:30;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;max-height:218px;overflow:auto;padding:12px;border:1px solid #dcd8d1;border-radius:9px;background:#faf8f5;box-shadow:0 15px 35px rgba(37,35,34,.16)}",
+      "#booking-form .booking-time-dropdown-option{min-width:0;padding:10px 5px;border:1px solid #e1dbd5;border-radius:6px;background:#fff;color:#252322;font:500 12px Manrope,sans-serif;cursor:pointer}",
+      "#booking-form .booking-time-dropdown-option:hover{border-color:#a67c78;background:#f1e9e4}",
+      "#booking-form .booking-time-suggestions{display:block;width:100%;grid-column:1/-1;margin:16px 0 24px}",
+      "#booking-form .booking-time-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}",
+      "@media(max-width:600px){#booking-form .booking-time-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}"
+    ].join("\\n");
+    document.head.append(pickerStyle);
+  }
 
   // Если в index.html уже есть контейнер, используем его.
   const suggestions = document.getElementById("booking-time-suggestions") ||
@@ -202,10 +270,7 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
   timeHelp.className = "booking-time-caption";
   timeHelp.textContent = "СВОБОДНОЕ ВРЕМЯ · ИЛИ ВВЕДИТЕ СВОЁ";
   function updateTimeHint() {
-    const extension = counts.extension > 0 || counts.nails > 0;
-    timeHelp.textContent = extension
-      ? "СВОБОДНОЕ ВРЕМЯ · ШАГ 2 ЧАСА · ИЛИ ВВЕДИТЕ СВОЁ"
-      : "СВОБОДНОЕ ВРЕМЯ · ШАГ 1 ЧАС · ИЛИ ВВЕДИТЕ СВОЁ";
+    timeHelp.textContent = "СВОБОДНОЕ ВРЕМЯ · ШАГ 30 МИН · ИЛИ ВВЕДИТЕ СВОЁ";
   }
   const slotGrid = document.createElement("div");
   slotGrid.className = "booking-time-grid";
@@ -243,8 +308,16 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
     ++validationVersion;
     slotGrid.replaceChildren();
     timeInput.value = "";
+    availableTimes = [];
+    hideTimeDropdown();
     if (!dateInput.value || !serviceInput.value) {
       setEmpty("Выберите дату и услугу, чтобы увидеть свободное время.");
+      return;
+    }
+    const day = new Date(dateInput.value + "T12:00:00Z").getUTCDay();
+    if (day === 0 || day === 6) {
+      setEmpty("Выбрана суббота или воскресенье. Мастер принимает по будням.");
+      setMessage("Выберите рабочую дату с понедельника по пятницу.", true);
       return;
     }
     setEmpty("Загружаем свободные часы...");
@@ -261,6 +334,7 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
       if (version !== slotVersion) return;
       if (!response.ok) throw new Error(data.error || "Не удалось загрузить часы");
       const times = Array.isArray(data.times) ? data.times : [];
+      availableTimes = times;
       slotGrid.replaceChildren();
       if (!times.length) {
         setEmpty("На этот день свободного времени нет. Выберите другую дату.");
@@ -275,9 +349,7 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
         button.dataset.time = time;
         button.setAttribute("aria-pressed", "false");
         button.addEventListener("click", () => {
-          timeInput.value = time;
-          highlightTime();
-          setMessage("Выбрано время: " + time + ".");
+          setSelectedTime(time);
         });
         slotGrid.append(button);
       }
@@ -320,6 +392,7 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
     if (/^\d{4}$/.test(value)) value = value.slice(0, 2) + ":" + value.slice(2);
     timeInput.value = value.slice(0, 5);
     highlightTime();
+    renderTimeDropdown(false);
     clearTimeout(checkTimer);
     if (/^([01]\d|2[0-3]):[0-5]\d$/.test(timeInput.value)) {
       checkTimer = setTimeout(checkManualTime, 350);
