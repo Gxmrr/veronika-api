@@ -82,16 +82,21 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
   timeInput.title = "Введите время в формате ЧЧ:ММ, например 12:30";
   timeInput.autocomplete = "off";
 
-  const suggestions = document.createElement("div");
-  suggestions.className = "booking-time-suggestions";
+  // Если в index.html уже есть контейнер, используем его.
+  const suggestions = document.getElementById("booking-time-suggestions") ||
+    document.createElement("div");
+  suggestions.classList.add("booking-time-suggestions");
   suggestions.setAttribute("aria-label", "Доступное время записи");
+  suggestions.replaceChildren();
   const timeHelp = document.createElement("div");
   timeHelp.className = "booking-time-caption";
   timeHelp.textContent = "СВОБОДНОЕ ВРЕМЯ · ИЛИ ВВЕДИТЕ СВОЁ";
   const slotGrid = document.createElement("div");
   slotGrid.className = "booking-time-grid";
   suggestions.append(timeHelp, slotGrid);
-  (timeInput.closest(".form-field") || timeInput.parentElement).after(suggestions);
+  if (!suggestions.isConnected) {
+    (timeInput.closest(".form-field") || timeInput.parentElement).after(suggestions);
+  }
 
   let slotVersion = 0;
   let validationVersion = 0;
