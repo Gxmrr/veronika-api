@@ -47,23 +47,24 @@ const pool = new Pool({
 // Продолжительность услуг взята из настроек учебного расписания.
 const OPEN_MINUTES = 12 * 60;
 const CLOSE_MINUTES = 20 * 60;
-const BREAK_MINUTES = 180;
+const BREAK_MINUTES = 15;
 
 const durations = new Map([
   ["Простой маникюр", 60],
-  ["Маникюр в один тон", 150],
-  ["Маникюр с дизайном", 180],
+  ["Маникюр в один тон", 90],
+  ["Маникюр с дизайном", 120],
   ["Ремонт ногтя", 60],
   ["Донаращивание ногтя", 120],
   ["Наращивание ногтя", 120]
 ]);
 
 // Дополнительные услуги и их продолжительность на одну позицию.
-// Для наращивания сохраняем ранее установленный норматив 2 часа.
+// Дополнения считают отдельные ногти. Старые полные процедуры наращивания
+// по-прежнему остаются в durations с прежней длительностью 120 минут.
 const addonDurations = Object.freeze({
-  repair: 60,
-  extension: 120,
-  nails: 120
+  repair: 15,
+  extension: 25,
+  nails: 25
 });
 
 // Никакого жёсткого лимита числа дополнительных услуг в интерфейсе.
@@ -95,11 +96,10 @@ function durationOf(service, addons = {}) {
   );
 }
 
-function slotStep(service, addons = {}) {
-  return service === "Донаращивание ногтя" ||
-    service === "Наращивание ногтя" ||
-    Number(addons.extension || 0) > 0 ||
-    Number(addons.nails || 0) > 0 ? 120 : 60;
+function slotStep(_service, _addons = {}) {
+  // Все свободные начала показываем с шагом 30 минут;
+  // реальная длительность выбранных услуг учитывается отдельно.
+  return 30;
 }
 
 function minuteOfDay(value) {
@@ -137,7 +137,7 @@ function timeIsAvailable(time, service, existing, manualBreaks = [], addons = {}
     // Для записей со старыми названиями используем безопасную длительность 2,5 часа.
     const bookedDuration = durationOf(row.service, row.addons) || 150;
     const bookedEnd = bookedStart + bookedDuration;
-    // Запрет пересечений и трёхчасовой интервал между процедурами.
+    // Запрет пересечений и 15-минутный интервал между процедурами.
     return start >= bookedEnd + BREAK_MINUTES ||
       bookedStart >= end + BREAK_MINUTES;
   });
@@ -220,8 +220,8 @@ app.get("/api/health", async (_req, res, next) => {
   }
 });
 
-// Для наращивания и донаращивания показываем слоты через 2 часа.
-// Для остальных услуг — через 1 час. POST по-прежнему принимает HH:MM до минуты.
+// Показываем доступные начала с шагом 30 минут, проверяя сумму длительностей.
+// POST принимает любое HH:MM с точностью до минуты при соблюдении расписания.
 app.get("/api/slots", async (req, res, next) => {
   try {
     const date = req.query.date;
@@ -511,7 +511,7 @@ app.patch("/api/bookings/:id", adminLimiter, async (req, res, next) => {
     if (!timeIsAvailable(time, service, booked, breaks, addons)) {
       await client.query("ROLLBACK");
       return res.status(409).json({
-        error: "Выбранное время занято, закрыто или нарушает трёхчасовой перерыв."
+        error: "Выбранное время занято, закрыто или нарушает 15-минутный перерыв."
       });
     }
 
@@ -615,7 +615,7 @@ app.post("/api/bookings", async (req, res, next) => {
     if (!timeIsAvailable(time, service, existing, manualBreaks, addons)) {
       await client.query("ROLLBACK");
       return res.status(409).json({
-        error: "Время закрыто мастером, занято или недостаточно трёхчасового перерыва."
+        error: "Время закрыто мастером, занято или недостаточно 15-минутного перерыва."
       });
     }
 
