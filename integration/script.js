@@ -256,7 +256,7 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
       "#booking-form .booking-time-suggestions{display:block;width:100%;grid-column:1/-1;margin:16px 0 24px}",
       "#booking-form .booking-time-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}",
       "@media(max-width:600px){#booking-form .booking-time-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}"
-    ].join("\\n");
+    ].join("\n");
     document.head.append(pickerStyle);
   }
 
