@@ -148,3 +148,47 @@ if (form && dateInput && serviceInput && timeInput && message && submitButton) {
     }
   });
 }
+
+
+/* VERONIKA — PRIVACY: compatible with the earlier consent dialog. */
+document.addEventListener("DOMContentLoaded", () => {
+  const dialog = document.getElementById("privacy-dialog");
+  const checkbox = document.getElementById("privacy-consent");
+  const bookingForm = document.getElementById("booking-form");
+  if (!dialog || !checkbox || !bookingForm) return;
+
+  function showPrivacy() {
+    if (!dialog.open) dialog.showModal();
+  }
+  function hidePrivacy() {
+    if (dialog.open) dialog.close();
+  }
+
+  document.querySelectorAll("[data-open-privacy]").forEach(button => {
+    button.addEventListener("click", showPrivacy);
+  });
+  document.getElementById("privacy-close")?.addEventListener("click", hidePrivacy);
+  document.getElementById("privacy-decline")?.addEventListener("click", hidePrivacy);
+  document.getElementById("privacy-accept")?.addEventListener("click", () => {
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    hidePrivacy();
+  });
+
+  bookingForm.addEventListener("click", event => {
+    const submit = event.target.closest('button[type="submit"], input[type="submit"]');
+    if (submit && !checkbox.checked) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      showPrivacy();
+    }
+  }, true);
+
+  bookingForm.addEventListener("submit", event => {
+    if (!checkbox.checked) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      showPrivacy();
+    }
+  }, true);
+});
