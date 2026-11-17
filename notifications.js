@@ -1,5 +1,11 @@
 // Transactional notification outbox for bookings (Telegram opt-in or SMS.ru).
 import { telegramSend, telegramReady } from "./telegram.js";
+// SMS sending through SMSTEL will be enabled only after its official API
+// request/response specification is available; do not invent an endpoint.
+export function smstelReady() { return false; }
+async function sendSmstel(_phone, _message) {
+  throw new Error("SMSTEL gateway not configured");
+}
 // Secrets must only live in ONREZA environment variables, never in GitHub.
 const API_KEY = process.env.SMS_RU_API_ID || "";
 
@@ -61,30 +67,6 @@ export async function queueReschedule(db, bookingId) {
   `, [bookingId]);
 }
 
-async function sendSms(phone, message) {
-  const params = new URLSearchParams({
-    api_id: API_KEY,
-    to: phone,
-    msg: message,
-    json: "1"
-  });
-  if (process.env.SMS_RU_FROM) {
-    params.set("from", process.env.SMS_RU_FROM);
-  }
-  const response = await fetch("https://sms.ru/sms/send", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: params,
-    signal: AbortSignal.timeout(15000)
-  });
-  if (!response.ok) throw new Error("SMS gateway HTTP " + response.status);
-  const data = await response.json();
-  if (data.status !== "OK" || data.sms?.[phone]?.status !== "OK") {
-    throw new Error("SMS gateway error " +
-      String(data.sms?.[phone]?.status_code || data.status_code || "unknown"));
-  }
-}
-
 function formatDate(iso) {
   const [year, month, day] = iso.split("-");
   return day + "." + month + "." + year;
@@ -93,7 +75,7 @@ function formatDate(iso) {
 // Trigger via a protected POST every minute (e.g. cron-job.org).
 // SKIP LOCKED prevents simultaneous invocations from claiming the same job.
 export async function processNotifications(pool, maxCount = 15) {
-  if (!API_KEY && !telegramReady()) return { configured: false, sent: 0, failed: 0 };
+  if (!smstelReady() && !telegramReady()) return { configured: false, sent: 0, failed: 0 };
   let sent = 0;
   let failed = 0;
 
@@ -108,7 +90,8 @@ export async function processNotifications(pool, maxCount = 15) {
           FROM booking_notifications n
           JOIN bookings b ON b.id = n.booking_id
           WHERE n.scheduled_at <= NOW()
-            AND ( ($1::boolean AND b.telegram_chat_id IS NOT NULL) OR $2::boolean )
+            AND (($1::boolean AND b.reminder_channel = 'telegram' AND b.telegram_chat_id IS NOT NULL)
+              OR ($2::boolean AND b.reminder_channel = 'sms'))
             AND ((b.visit_date + b.visit_time)
               AT TIME ZONE 'Europe/Moscow') > NOW()
             AND n.attempts < 5
@@ -125,7 +108,7 @@ export async function processNotifications(pool, maxCount = 15) {
               locked_until = NOW() + INTERVAL '2 minutes'
         FROM picked WHERE n.id = picked.id
         RETURNING n.id, n.booking_id, n.kind, n.revision
-      `, [telegramReady(), Boolean(API_KEY)]);
+      `, [telegramReady(), smstelReady()]);
       job = claim.rows[0];
       await db.query("COMMIT");
     } catch (error) {
@@ -138,7 +121,7 @@ export async function processNotifications(pool, maxCount = 15) {
 
     try {
       const result = await pool.query(`
-        SELECT phone, telegram_chat_id,
+        SELECT phone, telegram_chat_id, reminder_channel,
           to_char(visit_date, 'YYYY-MM-DD') AS date,
           to_char(visit_time, 'HH24:MI') AS time
         FROM bookings WHERE id = $1
@@ -151,16 +134,14 @@ export async function processNotifications(pool, maxCount = 15) {
       const message = job.kind === "reminder"
         ? "VERONIKA: напоминаем, запись через час (" + when + ")."
         : "VERONIKA: ваша запись перенесена на " + when + ".";
-      if (telegramReady() && b.telegram_chat_id) {
-        // Free and explicitly opted-in: send only to the linked Telegram chat.
+      if (b.reminder_channel === "telegram" && telegramReady() && b.telegram_chat_id) {
         await telegramSend(String(b.telegram_chat_id), message);
-      } else if (API_KEY) {
-        // Paid SMS fallback only if the operator configured SMS.ru.
+      } else if (b.reminder_channel === "sms" && smstelReady()) {
         const phone = smsPhone(b.phone);
-        if (!phone) throw new Error("Invalid Russian mobile number");
-        await sendSms(phone, message);
+        if (!phone) throw new Error("Invalid mobile number");
+        await sendSmstel(phone, message);
       } else {
-        throw new Error("No available opt-in notification channel");
+        throw new Error("Selected notification channel is not ready");
       }
       await pool.query(`
         UPDATE booking_notifications
@@ -181,5 +162,5 @@ export async function processNotifications(pool, maxCount = 15) {
       `, [job.id, job.revision, String(error.message || "SMS failed").slice(0, 150)]);
     }
   }
-  return { configured: true, sent, failed };
+  return { configured: true, sent, failed, telegramConfigured: telegramReady(), smsConfigured: smstelReady() };
 }
