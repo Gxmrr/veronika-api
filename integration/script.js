@@ -174,13 +174,8 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
   reminderHelp.className = "booking-reminder-help";
   reminderHelp.textContent = "Доступность Telegram и SMS проверяется. Можно записаться без напоминания.";
   reminderSection.append(reminderLabel, reminderSelect, reminderHelp);
-  const bookingDateGroup = dateInput.closest(".booking-picker-row") ||
-    dateInput.closest(".form-columns") || dateInput.parentElement;
-  if (bookingDateGroup && bookingDateGroup !== form) {
-    bookingDateGroup.before(reminderSection);
-  } else {
-    addonSection.after(reminderSection);
-  }
+  // Always directly after additional services and before date/time.
+  addonSection.after(reminderSection);
 
   if (!document.getElementById("veronika-reminder-styles")) {
     const style = document.createElement("style");
