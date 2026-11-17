@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS bookings (
   addons JSONB NOT NULL DEFAULT '{}'::jsonb,
   telegram_chat_id BIGINT,
   telegram_link_token_hash VARCHAR(64),
+  reminder_channel VARCHAR(16) NOT NULL DEFAULT 'none' CHECK (reminder_channel IN ('none', 'telegram', 'sms')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT unique_visit_datetime UNIQUE (visit_date, visit_time)
 );
@@ -49,3 +50,4 @@ CREATE TABLE IF NOT EXISTS booking_notifications (
 ALTER TABLE bookings ADD COLUMN IF NOT EXISTS addons JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE bookings ADD COLUMN IF NOT EXISTS telegram_chat_id BIGINT;
 ALTER TABLE bookings ADD COLUMN IF NOT EXISTS telegram_link_token_hash VARCHAR(64);
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS reminder_channel VARCHAR(16) NOT NULL DEFAULT 'none';
