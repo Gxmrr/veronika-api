@@ -410,6 +410,13 @@
         for (const field of fields) {
           const td = document.createElement("td");
           td.textContent = field === "service" ? formatServices(booking) : (booking[field] ?? "—");
+          if (field === "service") {
+            const note = document.createElement("div");
+            note.style.cssText = "margin-top:8px;font-size:11px;color:var(--muted)";
+            const names = { telegram: "Telegram", sms: "SMS", none: "без напоминания" };
+            note.textContent = "Напоминание: " + (names[booking.reminder_channel] || "без напоминания");
+            td.append(note);
+          }
           if (field === "name") td.className = "name";
           if (field === "phone") td.className = "phone";
           tr.appendChild(td);
