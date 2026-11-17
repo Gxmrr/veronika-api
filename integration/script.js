@@ -37,7 +37,7 @@ if (phoneInput) {
   phoneInput.setAttribute("pattern", "(?:[78][0-9]{10}|[0-9]{10})");
   phoneInput.setAttribute("title", "Введите 10 цифр или 11 цифр, начиная с 7 или 8");
   phoneInput.setAttribute("placeholder", "79991234567");
-  phoneInput.maxLength = 11;
+  phoneInput.maxLength = 32; // Allow paste of formatted numbers, then strip separators
   phoneInput.addEventListener("input", () => {
     phoneInput.value = phoneInput.value.replace(/\D/g, "").slice(0, 11);
   });
