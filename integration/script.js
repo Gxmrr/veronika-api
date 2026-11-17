@@ -409,6 +409,7 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
     event.preventDefault();
     if (!form.reportValidity()) return;
     submitButton.disabled = true;
+    document.getElementById("veronika-telegram-optin")?.remove();
     setMessage("Проверяем время и создаём запись...");
     const chosenDate = dateInput.value;
     const chosenTime = timeInput.value;
@@ -435,6 +436,17 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
       ++validationVersion;
       setEmpty("Выберите дату и услугу, чтобы увидеть свободное время.");
       setMessage("Вы успешно записаны на " + chosenDate + " в " + chosenTime + ".");
+      if (typeof data.telegramLink === "string" &&
+          /^https:\/\/t\.me\/[A-Za-z0-9_]{5,32}\?start=[A-Za-z0-9_-]{20,64}$/.test(data.telegramLink)) {
+        const reminderLink = document.createElement("a");
+        reminderLink.id = "veronika-telegram-optin";
+        reminderLink.href = data.telegramLink;
+        reminderLink.target = "_blank";
+        reminderLink.rel = "noopener noreferrer";
+        reminderLink.textContent = "Подключить бесплатное напоминание за час в Telegram ↗";
+        reminderLink.style.cssText = "display:block;margin:14px 0;padding:14px;border:1px solid #dcd8d1;border-radius:8px;color:#252322;background:#faf8f5;font-size:13px;text-decoration:none";
+        message.after(reminderLink);
+      }
     } catch (error) {
       setMessage(error.message, true);
       if (/занят|перерыв|время закрыто/i.test(error.message)) {
