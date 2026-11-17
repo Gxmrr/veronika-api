@@ -481,16 +481,20 @@
     editNotice.textContent = "Проверяем расписание и сохраняем перенос...";
     try {
       const bookingBeforeMove = selectedBooking;
+      const chosenDate = editDate.value;
+      const chosenTime = editTime.value;
       const updated = await request(
-        "/api/bookings/" + encodeURIComponent(selectedBooking.id),
+        "/api/bookings/" + encodeURIComponent(bookingBeforeMove.id),
         {
           method: "PATCH",
-          body: JSON.stringify({ date: editDate.value, time: editTime.value })
+          body: JSON.stringify({ date: chosenDate, time: chosenTime })
         }
       );
       await loadAppointments();
       setStatus(updated.message || "Запись перенесена.");
-      openContact(bookingBeforeMove, "moved", editDate.value, editTime.value);
+      if (chosenDate !== bookingBeforeMove.date || chosenTime !== bookingBeforeMove.time) {
+        openContact(bookingBeforeMove, "moved", chosenDate, chosenTime);
+      }
     } catch (error) {
       editNotice.textContent = error.message;
       editNotice.classList.add("error");
