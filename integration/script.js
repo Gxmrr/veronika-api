@@ -75,7 +75,9 @@ if (form && dateInput && timeInput && serviceInput && message && submitButton) {
   addonTotal.className = "booking-addon-total";
   addonTotal.setAttribute("aria-live", "polite");
   addonSection.append(addonTitle, addonDescription, addonList, addonTotal);
-  (serviceInput.closest(".form-field") || serviceInput.parentElement).after(addonSection);
+  const serviceWrapper = serviceInput.closest(".form-field");
+  if (serviceWrapper && serviceWrapper !== form) serviceWrapper.after(addonSection);
+  else serviceInput.after(addonSection);
 
   // Стили встроены, чтобы не пришлось вставлять JS в style.css.
   if (!document.getElementById("veronika-addon-style")) {
