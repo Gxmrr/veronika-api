@@ -57,7 +57,7 @@ export async function processTelegramUpdate(pool, update) {
   const content = message.text.trim();
   if (content === "/stop") {
     const result = await pool.query(
-      "UPDATE bookings SET telegram_chat_id = NULL WHERE telegram_chat_id = $1 RETURNING id",
+      "UPDATE bookings SET telegram_chat_id = NULL, reminder_channel = 'none' WHERE telegram_chat_id = $1 AND reminder_channel = 'telegram' RETURNING id",
       [String(chat.id)]
     );
     await telegramSend(chat.id, "Уведомления VERONIKA отключены. Записей: " + result.rowCount + ".");
@@ -66,7 +66,7 @@ export async function processTelegramUpdate(pool, update) {
   const match = /^\/start\s+([A-Za-z0-9_-]{20,64})$/.exec(content);
   if (!match) {
     if (content.startsWith("/start") || content === "/help") {
-      await telegramSend(chat.id, "Для бесплатного напоминания оформите запись на сайте VERONIKA и нажмите кнопку «Подключить Telegram» после оформления.");
+      await telegramSend(chat.id, "Для бесплатного напоминания выберите Telegram на сайте VERONIKA и нажмите кнопку подключения после записи.");
     }
     return;
   }
@@ -74,6 +74,7 @@ export async function processTelegramUpdate(pool, update) {
   const result = await pool.query(
     "UPDATE bookings SET telegram_chat_id = $1, telegram_link_token_hash = NULL " +
     "WHERE telegram_link_token_hash = $2 " +
+    "AND reminder_channel = 'telegram' " +
     "AND ((visit_date + visit_time) AT TIME ZONE 'Europe/Moscow') > NOW() " +
     "RETURNING to_char(visit_date,'DD.MM.YYYY') AS date, " +
     "to_char(visit_time,'HH24:MI') AS time",
