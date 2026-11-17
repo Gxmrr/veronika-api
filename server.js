@@ -356,7 +356,7 @@ app.post("/api/admin/p1sms/test", adminLimiter, async (req, res, next) => {
     }
     try {
       await sendP1sms(process.env.P1SMS_TEST_PHONE,
-        "VERONIKA: test SMS. P1SMS API connection.");
+        "VERONIKA: test SMS. P1SMS API connection.", { test: true });
       await pool.query(`UPDATE p1sms_test_log SET result = 'accepted'
         WHERE day = (NOW() AT TIME ZONE 'Europe/Moscow')::date`);
       res.json({ success: true,
