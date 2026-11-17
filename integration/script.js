@@ -1,4 +1,5 @@
-// VERONIKA: the server supplies available 15-minute booking slots.
+// VERONIKA: календарь + свободные часы + ручной ввод времени.
+// Не меняет другие части страницы: карту, футер, анимации и меню.
 const API_BASE = "https://veronika-api-lashkovmaximik-g7tm.onreza.app";
 const form = document.getElementById("booking-form");
 const dateInput = document.getElementById("date");
@@ -7,18 +8,15 @@ const phoneInput = document.getElementById("phone");
 const message = document.getElementById("message");
 const submitButton = form?.querySelector('[type="submit"]');
 
-// Replace the previous manual time input with a list of available slots.
-const previousTime = document.getElementById("time");
-let timeInput = previousTime;
-if (previousTime && previousTime.tagName !== "SELECT") {
-  const select = document.createElement("select");
-  select.id = previousTime.id;
-  select.name = previousTime.name || "time";
-  select.className = previousTime.className;
-  select.required = true;
-  select.setAttribute("aria-label", "Доступное время");
-  previousTime.replaceWith(select);
-  timeInput = select;
+const oldTimeInput = document.getElementById("time");
+let timeInput = oldTimeInput;
+if (oldTimeInput && oldTimeInput.tagName === "SELECT") {
+  const replacement = document.createElement("input");
+  replacement.id = "time";
+  replacement.name = oldTimeInput.name || "time";
+  replacement.className = oldTimeInput.className;
+  oldTimeInput.replaceWith(replacement);
+  timeInput = replacement;
 }
 
 function dateInMoscow() {
@@ -32,93 +30,191 @@ function dateInMoscow() {
 
 if (phoneInput) {
   phoneInput.type = "tel";
-  phoneInput.setAttribute("inputmode", "numeric");
-  phoneInput.setAttribute("autocomplete", "tel");
-  phoneInput.setAttribute("pattern", "(?:[78][0-9]{10}|[0-9]{10})");
-  phoneInput.setAttribute("title", "Введите 10 цифр или 11 цифр, начиная с 7 или 8");
-  phoneInput.setAttribute("placeholder", "79991234567");
-  phoneInput.maxLength = 32; // Allow paste of formatted numbers, then strip separators
+  phoneInput.inputMode = "numeric";
+  phoneInput.autocomplete = "tel";
+  phoneInput.pattern = "(?:[78][0-9]{10}|[0-9]{10})";
+  phoneInput.title = "Введите 10 цифр или 11 цифр, начиная с 7 или 8";
+  phoneInput.placeholder = "79991234567";
+  phoneInput.maxLength = 32;
   phoneInput.addEventListener("input", () => {
     phoneInput.value = phoneInput.value.replace(/\D/g, "").slice(0, 11);
   });
 }
 
-if (form && dateInput && serviceInput && timeInput && message && submitButton) {
-  dateInput.min = dateInMoscow();
-  const maxDay = new Date(dateInMoscow() + "T12:00:00Z");
+if (form && dateInput && timeInput && serviceInput && message && submitButton) {
+  const today = dateInMoscow();
+  const maxDay = new Date(today + "T12:00:00Z");
   maxDay.setUTCDate(maxDay.getUTCDate() + 90);
-  dateInput.max = maxDay.toISOString().slice(0, 10);
-  let requestVersion = 0;
 
-  const showMessage = (text, error = false) => {
+  // Нативный календарь, но открывается по нажатию на всю область поля.
+  dateInput.type = "date";
+  dateInput.min = today;
+  dateInput.max = maxDay.toISOString().slice(0, 10);
+  dateInput.required = true;
+  dateInput.setAttribute("aria-label", "Дата записи");
+  const calendarShell = document.createElement("div");
+  calendarShell.className = "booking-calendar-shell";
+  dateInput.before(calendarShell);
+  calendarShell.append(dateInput);
+
+  const calendarButton = document.createElement("button");
+  calendarButton.type = "button";
+  calendarButton.className = "booking-calendar-button";
+  calendarButton.setAttribute("aria-label", "Открыть календарь");
+  calendarButton.textContent = "▦";
+  calendarShell.append(calendarButton);
+  function openCalendar() {
+    if (typeof dateInput.showPicker === "function") {
+      try { dateInput.showPicker(); return; } catch (_error) {}
+    }
+    dateInput.focus();
+  }
+  calendarButton.addEventListener("click", openCalendar);
+  dateInput.addEventListener("click", openCalendar);
+
+  // Простое текстовое поле: можно набрать 12:30, а можно выбрать кнопкой.
+  timeInput.type = "text";
+  timeInput.required = true;
+  timeInput.placeholder = "Например, 12:30";
+  timeInput.inputMode = "numeric";
+  timeInput.maxLength = 5;
+  timeInput.pattern = "(?:[01][0-9]|2[0-3]):[0-5][0-9]";
+  timeInput.title = "Введите время в формате ЧЧ:ММ, например 12:30";
+  timeInput.autocomplete = "off";
+
+  const suggestions = document.createElement("div");
+  suggestions.className = "booking-time-suggestions";
+  suggestions.setAttribute("aria-label", "Доступное время записи");
+  const timeHelp = document.createElement("div");
+  timeHelp.className = "booking-time-caption";
+  timeHelp.textContent = "СВОБОДНОЕ ВРЕМЯ · ИЛИ ВВЕДИТЕ СВОЁ";
+  const slotGrid = document.createElement("div");
+  slotGrid.className = "booking-time-grid";
+  suggestions.append(timeHelp, slotGrid);
+  (timeInput.closest(".form-field") || timeInput.parentElement).after(suggestions);
+
+  let slotVersion = 0;
+  let validationVersion = 0;
+  let checkTimer;
+
+  function setMessage(text, error = false) {
     message.textContent = text;
     message.style.color = error ? "#b44d42" : "";
-  };
-
-  function emptyTimes(prompt = "Сначала выберите услугу и дату") {
-    timeInput.replaceChildren(new Option(prompt, "", true, true));
-    timeInput.disabled = true;
+  }
+  function setEmpty(text) {
+    slotGrid.replaceChildren();
+    const placeholder = document.createElement("p");
+    placeholder.className = "booking-time-empty";
+    placeholder.textContent = text;
+    slotGrid.append(placeholder);
+  }
+  function highlightTime() {
+    slotGrid.querySelectorAll("button[data-time]").forEach(button => {
+      const chosen = button.dataset.time === timeInput.value;
+      button.classList.toggle("is-selected", chosen);
+      button.setAttribute("aria-pressed", String(chosen));
+    });
   }
 
-  async function loadFreeTimes() {
-    const version = ++requestVersion;
-    const previous = timeInput.value;
-    emptyTimes("Загружаем свободные часы...");
+  async function loadAvailableTimes() {
+    const version = ++slotVersion;
+    clearTimeout(checkTimer);
+    ++validationVersion;
+    slotGrid.replaceChildren();
+    timeInput.value = "";
     if (!dateInput.value || !serviceInput.value) {
-      emptyTimes();
-      showMessage("Выберите услугу и дату — появятся доступные часы.");
+      setEmpty("Выберите дату и услугу, чтобы увидеть свободное время.");
       return;
     }
+    setEmpty("Загружаем свободные часы...");
     try {
-      const params = new URLSearchParams({
+      const query = new URLSearchParams({
         date: dateInput.value,
         service: serviceInput.value
       });
-      const response = await fetch(API_BASE + "/api/slots?" + params, {
+      const response = await fetch(API_BASE + "/api/slots?" + query, {
         cache: "no-store"
       });
-      const result = await response.json();
-      if (version !== requestVersion) return;
-      if (!response.ok) {
-        throw new Error(result.error || "Не удалось загрузить свободное время");
+      const data = await response.json();
+      if (version !== slotVersion) return;
+      if (!response.ok) throw new Error(data.error || "Не удалось загрузить часы");
+      const times = Array.isArray(data.times) ? data.times : [];
+      slotGrid.replaceChildren();
+      if (!times.length) {
+        setEmpty("На этот день свободного времени нет. Выберите другую дату.");
+        setMessage("Свободных записей на эту дату нет.", true);
+        return;
       }
-      const times = Array.isArray(result.times) ? result.times : [];
-      emptyTimes(times.length ? "Выберите свободное время" : "Свободного времени нет");
       for (const time of times) {
-        timeInput.add(new Option(time, time));
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "booking-time-option";
+        button.textContent = time;
+        button.dataset.time = time;
+        button.setAttribute("aria-pressed", "false");
+        button.addEventListener("click", () => {
+          timeInput.value = time;
+          highlightTime();
+          setMessage("Выбрано время: " + time + ".");
+        });
+        slotGrid.append(button);
       }
-      timeInput.disabled = times.length === 0;
-      if (times.includes(previous)) timeInput.value = previous;
-      showMessage(times.length
-        ? "Свободных вариантов: " + times.length + ". Выберите удобное время."
-        : "На эту дату нет доступного времени. Попробуйте другой день.",
-        times.length === 0);
+      setMessage("Выберите свободное время ниже или введите своё.");
     } catch (error) {
-      if (version !== requestVersion) return;
-      emptyTimes("Ошибка загрузки времени");
-      showMessage("Не удалось получить время: " + error.message, true);
+      if (version !== slotVersion) return;
+      setEmpty("Не удалось загрузить доступное время.");
+      setMessage(error.message, true);
     }
   }
 
-  dateInput.addEventListener("change", loadFreeTimes);
-  serviceInput.addEventListener("change", loadFreeTimes);
-  timeInput.addEventListener("change", () => {
-    if (timeInput.value) showMessage("Выбрано время: " + timeInput.value);
-  });
+  async function checkManualTime() {
+    const version = ++validationVersion;
+    const time = timeInput.value;
+    if (!dateInput.value || !serviceInput.value ||
+        !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return;
+    try {
+      const params = new URLSearchParams({
+        date: dateInput.value, service: serviceInput.value, time
+      });
+      const response = await fetch(API_BASE + "/api/availability?" + params, {
+        cache: "no-store"
+      });
+      const data = await response.json();
+      if (version !== validationVersion) return;
+      setMessage(data.message || data.error || "Не удалось проверить время",
+        !response.ok || !data.available);
+    } catch (error) {
+      if (version !== validationVersion) return;
+      setMessage("Не удалось проверить время: " + error.message, true);
+    }
+  }
 
-  emptyTimes();
-  if (dateInput.value && serviceInput.value) loadFreeTimes();
+  dateInput.addEventListener("change", loadAvailableTimes);
+  serviceInput.addEventListener("change", loadAvailableTimes);
+  timeInput.addEventListener("input", () => {
+    // 1230 превращается в 12:30, а 12:30 остаётся 12:30.
+    let value = timeInput.value.replace(/[^\d:]/g, "");
+    if (/^\d{4}$/.test(value)) value = value.slice(0, 2) + ":" + value.slice(2);
+    timeInput.value = value.slice(0, 5);
+    highlightTime();
+    clearTimeout(checkTimer);
+    if (/^([01]\d|2[0-3]):[0-5]\d$/.test(timeInput.value)) {
+      checkTimer = setTimeout(checkManualTime, 350);
+    }
+  });
+  timeInput.addEventListener("change", checkManualTime);
+
+  setEmpty("Выберите дату и услугу, чтобы увидеть свободное время.");
+  if (dateInput.value && serviceInput.value) loadAvailableTimes();
 
   form.addEventListener("submit", async event => {
     event.preventDefault();
     if (!form.reportValidity()) return;
-    if (!timeInput.value) {
-      showMessage("Пожалуйста, выберите свободное время.", true);
-      return;
-    }
     submitButton.disabled = true;
-    showMessage("Сохраняем запись...");
-    const selected = { date: dateInput.value, time: timeInput.value };
+    setMessage("Проверяем время и создаём запись...");
+    const chosenDate = dateInput.value;
+    const chosenTime = timeInput.value;
+
     try {
       const response = await fetch(API_BASE + "/api/bookings", {
         method: "POST",
@@ -127,21 +223,21 @@ if (form && dateInput && serviceInput && timeInput && message && submitButton) {
           name: document.getElementById("name").value.trim(),
           phone: phoneInput.value,
           service: serviceInput.value,
-          date: selected.date,
-          time: selected.time
+          date: chosenDate,
+          time: chosenTime
         })
       });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Не удалось создать запись");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Не удалось создать запись");
       form.reset();
-      requestVersion++;
-      emptyTimes();
-      showMessage("Запись создана на " + selected.date + " в " + selected.time + ".");
+      ++slotVersion;
+      ++validationVersion;
+      setEmpty("Выберите дату и услугу, чтобы увидеть свободное время.");
+      setMessage("Вы успешно записаны на " + chosenDate + " в " + chosenTime + ".");
     } catch (error) {
-      showMessage(error.message, true);
-      // Another customer may have booked the same slot.
-      if (error.message.includes("занят") || error.message.includes("перерыва")) {
-        await loadFreeTimes();
+      setMessage(error.message, true);
+      if (/занят|перерыв|время закрыто/i.test(error.message)) {
+        await loadAvailableTimes();
       }
     } finally {
       submitButton.disabled = false;
