@@ -281,6 +281,21 @@
     status.classList.toggle("error", error);
   };
 
+  const addonLabels = {
+    repair: "Ремонт ногтя",
+    extension: "Донаращивание ногтя",
+    nails: "Наращивание ногтя"
+  };
+
+  function formatServices(booking) {
+    const extra = booking.addons && typeof booking.addons === "object"
+      ? Object.entries(booking.addons)
+        .filter(([key, count]) => addonLabels[key] && Number(count) > 0)
+        .map(([key, count]) => addonLabels[key] + " × " + count)
+      : [];
+    return [booking.service, ...extra].join(" + ");
+  }
+
   function showEdit(booking) {
     selectedBooking = booking;
     editDate.min = todayInMoscow();
@@ -288,7 +303,7 @@
     editTime.value = booking.time;
     editDescription.textContent =
       "Перенос записи №" + booking.id + ": " + booking.name +
-      ". Услуга: " + booking.service + ".";
+      ". Услуги: " + formatServices(booking) + ".";
     editNotice.textContent = "Новая дата и время должны быть свободны. Перерыв 3 часа сохраняется.";
     editNotice.classList.remove("error");
     editSection.hidden = false;
@@ -327,7 +342,7 @@
         const tr = document.createElement("tr");
         for (const field of fields) {
           const td = document.createElement("td");
-          td.textContent = booking[field] ?? "—";
+          td.textContent = field === "service" ? formatServices(booking) : (booking[field] ?? "—");
           if (field === "name") td.className = "name";
           if (field === "phone") td.className = "phone";
           tr.appendChild(td);
