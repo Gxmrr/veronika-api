@@ -16,8 +16,8 @@ const allowedOrigin = process.env.CLIENT_ORIGIN || "*";
 
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader("Vary", "Origin");
 
   if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -97,10 +97,11 @@ function timeIsAvailable(time, service, existing, manualBreaks = []) {
   });
 }
 
-async function bookingsForDate(db, date) {
+async function bookingsForDate(db, date, excludedId = null) {
   const result = await db.query(
-    "SELECT to_char(visit_time, 'HH24:MI') AS time, service FROM bookings WHERE visit_date = $1",
-    [date]
+    `SELECT to_char(visit_time, 'HH24:MI') AS time, service FROM bookings
+     WHERE visit_date = $1 AND ($2::bigint IS NULL OR id <> $2::bigint)`,
+    [date, excludedId]
   );
   return result.rows;
 }
@@ -374,6 +375,128 @@ app.delete("/api/breaks/:id", adminLimiter, async (req, res, next) => {
     res.json({ success: true });
   } catch (error) {
     next(error);
+  }
+});
+
+// Редактирование и удаление записей доступно только в панели мастера.
+// Изменение даты/времени проверяется по тем же правилам, что и новая запись.
+function validBookingId(id) {
+  return typeof id === "string" && /^[1-9][0-9]{0,17}$/.test(id);
+}
+
+async function acquireDateLocks(client, dates) {
+  for (const date of [...new Set(dates)].sort()) {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1::text))", [date]);
+  }
+}
+
+app.patch("/api/bookings/:id", adminLimiter, async (req, res, next) => {
+  if (!authorized(req)) {
+    return res.status(401).json({ error: "Неверный ключ администратора." });
+  }
+  const id = req.params.id;
+  const { date, time } = req.body || {};
+  if (!validBookingId(id) || !validDate(date) ||
+      !Number.isFinite(minuteOfDay(time)) || !futureSlot(date, time)) {
+    return res.status(400).json({ error: "Укажите существующую запись и будущие дату и время." });
+  }
+
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query("BEGIN");
+    const first = await client.query(
+      "SELECT to_char(visit_date, 'YYYY-MM-DD') AS date FROM bookings WHERE id = $1",
+      [id]
+    );
+    if (!first.rowCount) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Запись не найдена." });
+    }
+    const previousDate = first.rows[0].date;
+    // Блокируем старую и новую дату в одном порядке, чтобы не было гонок.
+    await acquireDateLocks(client, [previousDate, date]);
+    const current = await client.query(
+      `SELECT to_char(visit_date, 'YYYY-MM-DD') AS date, service
+       FROM bookings WHERE id = $1 FOR UPDATE`,
+      [id]
+    );
+    if (!current.rowCount || current.rows[0].date !== previousDate) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "Запись изменилась. Обновите журнал и повторите." });
+    }
+    const service = current.rows[0].service;
+    if (!fitsSchedule(time, service)) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        error: "Процедура не помещается в рабочий день (12:00–20:00)."
+      });
+    }
+
+    const booked = await bookingsForDate(client, date, id);
+    const breaks = await manualBreaksForDate(client, date);
+    if (!timeIsAvailable(time, service, booked, breaks)) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        error: "Выбранное время занято, закрыто или нарушает трёхчасовой перерыв."
+      });
+    }
+
+    await client.query(
+      "UPDATE bookings SET visit_date = $1, visit_time = $2 WHERE id = $3",
+      [date, time, id]
+    );
+    await client.query("COMMIT");
+    res.json({ success: true, id, date, time, message: "Запись перенесена." });
+  } catch (error) {
+    if (client) await client.query("ROLLBACK").catch(() => {});
+    if (error.code === "23505") {
+      return res.status(409).json({ error: "Это время уже занято." });
+    }
+    next(error);
+  } finally {
+    client?.release();
+  }
+});
+
+app.delete("/api/bookings/:id", adminLimiter, async (req, res, next) => {
+  if (!authorized(req)) {
+    return res.status(401).json({ error: "Неверный ключ администратора." });
+  }
+  const id = req.params.id;
+  if (!validBookingId(id)) {
+    return res.status(400).json({ error: "Неверный номер записи." });
+  }
+
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query("BEGIN");
+    const first = await client.query(
+      "SELECT to_char(visit_date, 'YYYY-MM-DD') AS date FROM bookings WHERE id = $1",
+      [id]
+    );
+    if (!first.rowCount) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Запись не найдена." });
+    }
+    const previousDate = first.rows[0].date;
+    await acquireDateLocks(client, [previousDate]);
+    const removed = await client.query(
+      "DELETE FROM bookings WHERE id = $1 AND visit_date = $2::date RETURNING id",
+      [id, previousDate]
+    );
+    if (!removed.rowCount) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "Запись уже изменена. Обновите журнал." });
+    }
+    await client.query("COMMIT");
+    res.json({ success: true, id, message: "Запись удалена." });
+  } catch (error) {
+    if (client) await client.query("ROLLBACK").catch(() => {});
+    next(error);
+  } finally {
+    client?.release();
   }
 });
 
