@@ -1,0 +1,277 @@
+
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Маникюр у Вероники в салоне красоты. Услуги, цены и запись.">
+    <title>Veronika. — Маникюр у Вероники</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="script.js" defer></script>
+</head>
+<body>
+    <header class="site-header">
+        <div class="container header-inner">
+            <a href="#top" class="logo" aria-label="Veronika — на главную">veronika<span>.</span></a>
+            <nav aria-label="Главное меню">
+                <a href="#about">О мастере</a>
+                <a href="#services">Услуги</a>
+                <a href="#booking">Запись <span aria-hidden="true">↗</span></a>
+            </nav>
+        </div>
+    </header>
+
+    <main id="top">
+        <section class="hero" aria-labelledby="hero-title">
+            <div class="container hero-layout">
+                <div class="hero-art" aria-hidden="true">
+                    <span class="poster-index">STUDIO / 01</span>
+                    <span class="poster-monogram">V<span>.</span></span>
+                    <span class="poster-line">VERONIKA — NAIL ATELIER</span>
+                    <span class="selection-frame">
+                        <i></i><i></i><i></i><i></i>
+                    </span>
+                    <span class="design-cursor">Veronika</span>
+                </div>
+
+                <div class="hero-copy">
+                    <h1 id="hero-title">
+                        Красота<br><em>в деталях.</em>
+                    </h1>
+
+                    <p class="statement">
+                        Маникюр у Вероники. Спокойная атмосфера,
+                        аккуратная работа и внимание к каждой детали.
+                    </p>
+
+                    <a href="#booking" class="hero-link">
+                        Выбрать время <span aria-hidden="true">↗</span>
+                    </a>
+
+                    <div class="hero-meta">
+                        <span>МАСТЕР ВЕРОНИКА</span>
+                        <span>12:00 — 20:00</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="about" class="container content-section">
+            <p class="section-index">01 / О МАСТЕРЕ</p>
+
+            <div class="section-main">
+                <h2>
+                    Ничего лишнего.<br>
+                    <em>Только детали.</em>
+                </h2>
+
+                <p class="section-intro">
+                    Меня зовут Вероника. Я мастер маникюра
+                    Здесь можно выбрать услугу и удобное время
+                    для посещения.
+                </p>
+
+                <div class="info">
+                    <div>
+                        <span>ВРЕМЯ РАБОТЫ</span>
+                        <strong>12:00 — 20:00</strong>
+                    </div>
+
+                    <div>
+                        <span>ПРОДОЛЖИТЕЛЬНОСТЬ</span>
+                        <strong>2–2,5 часа</strong>
+                    </div>
+
+                    <div>
+                        <span>ПЕРЕРЫВ</span>
+                        <strong>15 Минут</strong>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="services" class="container content-section">
+            <p class="section-index">02 / УСЛУГИ</p>
+
+            <div class="section-main">
+                <h2>Услуги <em>и цены.</em></h2>
+
+                <div class="services">
+                    <article class="card">
+                        <h3>Простой маникюр</h3>
+                        <p class="price">1 200 ₽</p>
+                    </article>
+
+                    <article class="card">
+                        <h3>Маникюр в один тон</h3>
+                        <p class="price">1 800 ₽</p>
+                    </article>
+
+                    <article class="card">
+                        <h3>Ремонт ногтя</h3>
+                        <p class="price">50 ₽</p>
+                    </article>
+
+                    <article class="card">
+                        <h3>Донаращивание ногтя</h3>
+                        <p class="price">100 ₽</p>
+                    </article>
+
+                    <article class="card">
+                        <h3>Наращивание ногтя</h3>
+                        <p class="price">150 ₽</p>
+                    </article>
+                </div>
+            </div>
+        </section>
+
+        <section id="booking" class="booking-section">
+            <div class="container content-section">
+                <p class="section-index">03 / ЗАПИСЬ</p>
+
+                <div class="section-main booking-layout">
+                    <div>
+                        <h2>
+                            Найдём<br>
+                            <em>ваше время.</em>
+                        </h2>
+
+                        <p class="section-intro">
+                            Выберите услугу и дату.
+                            Доступные часы появятся после
+                            подключения расписания.
+                        </p>
+                    </div>
+
+                    <form id="booking-form">
+                        <label for="name">Ваше имя</label>
+                        <input type="text" id="name" name="name"
+                               autocomplete="name" required>
+
+                        <label for="phone">Номер телефона</label>
+                        <input type="tel" id="phone" name="phone"
+                               autocomplete="tel" required>
+
+                        <label for="service">Услуга</label>
+                        <select id="service" name="service" required>
+                            <option value="">Выберите услугу</option>
+                            <option value="basic">Простой маникюр</option>
+                            <option value="color">Маникюр в один тон</option>
+                            <option value="repair">Ремонт ногтя</option>
+                            <option value="extension">Донаращивание ногтя</option>
+                            <option value="nails">Наращивание ногтя</option>
+                        </select>
+
+                        <div class="form-columns">
+  
+<div class="booking-picker-row">
+    <div class="booking-picker-field">
+      <label for="date">Дата</label>
+      <input
+        type="date"
+        id="date"
+        name="date"
+        required
+      >
+    </div>
+  
+    <div class="booking-picker-field">
+      <label for="time">Время</label>
+      <input
+        type="text"
+        id="time"
+        name="time"
+        placeholder="12:30"
+        inputmode="numeric"
+        autocomplete="off"
+        required
+      >
+    </div>
+  </div>
+  
+  <div
+    id="booking-time-suggestions"
+    class="booking-time-suggestions"
+  ></div>
+  
+                                <button type="submit" class="form-button">
+                                    Записаться
+                                    <span aria-hidden="true">↗</span>
+                                </button>
+                                
+                                <p id="message" class="form-note" aria-live="polite"></p>
+                                </form>
+                                
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="site-footer">
+        <div class="contain
+        er">
+            <div class="footer-top">
+                <div>
+                    <a href="#top" class="footer-brand">veronika.</a>
+                    <p>Салон красоты</p>
+                </div>
+    
+                <a href="#top" class="footer-up">
+                    Вернуться наверх ↗
+                </a>
+            </div>
+        
+<div class="footer-map-section">
+    <div class="footer-map-info">
+      <span class="map-label">НАШ АДРЕС / 01</span>
+      <h2>Как нас найти<span>.</span></h2>
+      <p>
+        Москва, Зеленоград<br>
+        Центральный проспект, корпус 402
+      </p>
+      <a
+        href="https://yandex.ru/maps/216/zelenograd/house/tsentralny_prospekt_k402/Z04YdAdoTEYEQFtsfXxxcX1jYA%3D%3D/"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Открыть в Яндекс Картах ↗
+      </a>
+    </div>
+  
+    <div class="footer-map-frame">
+      <iframe
+        src="https://yandex.ru/map-widget/v1/?ll=37.208533%2C56.000104&amp;mode=whatshere&amp;whatshere%5Bpoint%5D=37.208533%2C56.000104&amp;whatshere%5Bzoom%5D=17&amp;z=17"
+        title="Яндекс Карта — Зеленоград, корпус 402"
+        loading="lazy"
+        allowfullscreen
+      ></iframe>
+    </div>
+  </div>
+  
+            <div class="footer-bottom">
+                <span>© 2026 VERONIKA. Все права защищены.</span>
+
+<div class="master-access">
+    <div class="master-access-info">
+      <span class="master-access-label">ДЛЯ МАСТЕРА / 01</span>
+      <h3>Управление записями</h3>
+      <p>Просмотр расписания, перенос записей и перерывы.</p>
+    </div>
+  
+    <a
+      href="https://veronika-api-lashkovmaximik-g7tm.onreza.app/admin"
+      class="master-access-button"
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      Журнал записей <span aria-hidden="true">↗</span>
+    </a>
+  </div>
+  
+            </div>
+        </div>
+    </footer>
+    
+        </div>
+    </footer>
+</body>
+</html>
